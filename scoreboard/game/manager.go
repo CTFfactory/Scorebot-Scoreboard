@@ -1,4 +1,5 @@
-// Copyright(C) 2020 - 2023 iDigitalFlame
+// Copyright(C) 2020 - 2026 iDigitalFlame
+// Copyright(C) 2026 luftegrof
 //
 // This program is free software: you can redistribute it and / or modify
 // it under the terms of the GNU Affero General Public License as published
@@ -12,7 +13,6 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.If not, see <https://www.gnu.org/licenses/>.
-//
 
 package game
 
@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -30,49 +31,29 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/PurpleSec/logx"
-	"github.com/PurpleSec/parseurl"
-	"github.com/dghubble/go-twitter/twitter"
 	"github.com/gorilla/websocket"
 )
 
 var errMissingGame = errors.New("game ID is missing from JSON data")
 
 type hello uint64
-type tweet struct {
-	User      string
-	Text      string
-	UserName  string
-	UserPhoto string
-	Images    []string
-	ID        uint64
-	expire    int64
-}
 type stream struct {
 	*websocket.Conn
 	ok bool
 }
-type tweets struct {
-	new     chan *twitter.Tweet
-	current []tweet
-	timeout time.Duration
-}
 
-// Manager is a struct that contains for a map of subs and controls the connections between Scorebot
-// and the Scoreboard clients.
 type Manager struct {
-	log     logx.Log
 	active  map[string]uint64
 	tick    *time.Ticker
 	subs    map[uint64]*subscription
 	client  *http.Client
-	twitter *tweets
 	url     url.URL
 	assets  string
 	Games   []meta
 	timeout time.Duration
 	running uint32
 }
+
 type subscription struct {
 	new     chan *websocket.Conn
 	cache   []update
@@ -91,69 +72,59 @@ func (m *Manager) close() {
 		close(s.new)
 		delete(m.subs, n)
 	}
-	if m.twitter != nil {
-		m.twitter.current = nil
-	}
 	m.tick.Stop()
 }
-func (t tweet) Sum() uint64 {
-	return t.ID
-}
+
 func cleanSlugString(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for i := range s {
 		switch {
-		case s[i] <= '9' && s[i] >= '0': // Numbers
-			fallthrough
-		case s[i] <= 'Z' && s[i] >= 'A': // Capital Letters
-			fallthrough
-		case s[i] <= 'z' && s[i] >= 'z': // Lowercase Letters
-			fallthrough
-		case s[i] == '-' || s[i] == '.' || s[i] == '_': // Symbols
+		case s[i] <= '9' && s[i] >= '0':
+			b.WriteByte(s[i])
+		case s[i] <= 'Z' && s[i] >= 'A':
+			b.WriteByte(s[i])
+		case s[i] <= 'z' && s[i] >= 'a':
+			b.WriteByte(s[i])
+		case s[i] == '-' || s[i] == '.' || s[i] == '_':
 			b.WriteByte(s[i])
 		default:
 			b.WriteByte('-')
 		}
 	}
-	v := b.String()
-	b.Reset()
-	return v
+	return b.String()
 }
 
-// Game will attempt to resolve the game name provided to an active game ID. This function will replace
-// any spaces and invalid characters and matches the Game name without case sensitivity. THis function returns
-// zero if no Game was found
 func (m *Manager) Game(s string) uint64 {
 	return m.active[strings.ToLower(cleanSlugString(s))]
 }
 
-// New attempts to add the supplied web client to the Subscription swarm.
 func (m *Manager) New(n *websocket.Conn) {
-	defer func(l logx.Log) {
+	defer func() {
 		if err := recover(); err != nil {
-			l.Error("Collection newclient function recovered from a panic: %s!", err)
+			slog.Error("Collection newclient function recovered from a panic", "error", err)
 		}
-	}(m.log)
-	m.log.Debug(`Received a connection from "%s", listening for Hello..`, n.RemoteAddr().String())
+	}()
+	slog.Debug("Received connection, listening for Hello", "remote", n.RemoteAddr().String())
 	var h hello
 	if err := n.ReadJSON(&h); err != nil {
-		m.log.Error(`Could not read Hello message from "%s", closing: %s!`, n.RemoteAddr().String(), err.Error())
+		slog.Error("Could not read Hello message", "remote", n.RemoteAddr().String(), "error", err.Error())
 		n.Close()
 		return
 	}
-	m.log.Debug(`Received Hello with requested Game ID %d from "%s".`, h, n.RemoteAddr().String())
+	slog.Debug("Received Hello with requested Game ID", "id", h, "remote", n.RemoteAddr().String())
 	s, ok := m.subs[uint64(h)]
 	if !ok || s == nil {
-		m.log.Debug(`Checking Game ID %d, requested by "%s"..`, h, n.RemoteAddr().String())
+		slog.Debug("Checking Game ID requested by remote", "id", h, "remote", n.RemoteAddr().String())
 		var g game
-		if err := m.getJSON(context.Background(), "api/scoreboard/"+strconv.FormatUint(uint64(h), 10)+"/", &g); err != nil {
-			m.log.Error("Error retrieving data for Game ID %d: %s!", h, err.Error())
+		// FastAPI core endpoint maps to /api/games/{id}/scoreboard
+		if err := m.getJSON(context.Background(), "api/games/"+strconv.FormatUint(uint64(h), 10)+"/scoreboard", &g); err != nil {
+			slog.Error("Error retrieving data for Game ID", "id", h, "error", err.Error())
 			n.Close()
 			return
 		}
 		if len(g.Meta.Name) == 0 && len(g.Teams) == 0 {
-			m.log.Error("Game ID %d is empty, ignoring!", h)
+			slog.Error("Game is empty, ignoring", "id", h)
 			n.Close()
 			return
 		}
@@ -172,19 +143,14 @@ func (m *Manager) New(n *websocket.Conn) {
 			last:    g,
 			clients: make([]*stream, 0, 1),
 		}
-		if m.twitter != nil {
-			s.last.Tweets = m.twitter.current
-		}
 		s.cache, _ = s.last.Delta(m.assets, nil)
 		m.subs[g.Meta.ID] = s
 	}
 	atomic.StoreUint32(&s.stale, 0)
-	n.WriteJSON(s.cache)
+	_ = n.WriteJSON(s.cache)
 	s.new <- n
 }
 
-// Start will start the Manager content thread. This function takes a context that will be used
-// to stop and cancel all running processes.
 func (m *Manager) Start(x context.Context) {
 	for {
 		select {
@@ -198,10 +164,11 @@ func (m *Manager) Start(x context.Context) {
 		}
 	}
 }
+
 func (m *Manager) update(x context.Context) {
-	m.log.Trace("Starting update..")
-	if err := m.getJSON(x, "api/games/", &m.Games); err != nil {
-		m.log.Error("Error occurred during update tick: %s", err.Error())
+	slog.Debug("Starting update..")
+	if err := m.getJSON(x, "api/games", &m.Games); err != nil {
+		slog.Error("Error occurred during update tick", "error", err.Error())
 		return
 	}
 	for i := range m.Games {
@@ -212,7 +179,7 @@ func (m *Manager) update(x context.Context) {
 		}
 		if _, ok := m.active[n]; !ok {
 			m.active[n] = m.Games[i].ID
-			m.log.Debug(`Added Game name mapping "%s" to ID %d.`, n, m.Games[i].ID)
+			slog.Debug("Added Game name mapping to ID", "name", n, "id", m.Games[i].ID)
 		}
 	}
 	select {
@@ -243,15 +210,13 @@ func (m *Manager) update(x context.Context) {
 			return
 		default:
 		}
-		m.log.Debug("Removing unused subscription for Game %d.", r[i])
+		slog.Debug("Removing unused subscription for Game", "id", r[i])
 		close(m.subs[r[i]].new)
 		delete(m.subs, r[i])
 	}
-	if m.twitter != nil {
-		m.twitter.update(x, m)
-	}
-	m.log.Debug("Read %d Games from scorebot, update finished.", len(m.Games))
+	slog.Debug("Update finished", "games_count", len(m.Games))
 }
+
 func (h *hello) UnmarshalJSON(b []byte) error {
 	var m map[string]uint64
 	if err := json.Unmarshal(b, &m); err != nil {
@@ -264,13 +229,14 @@ func (h *hello) UnmarshalJSON(b []byte) error {
 	*h = hello(v)
 	return nil
 }
+
 func (m *Manager) startUpdate(x context.Context) {
 	atomic.StoreUint32(&m.running, 1)
 	c, f := context.WithTimeout(x, m.timeout)
 	go func(y context.Context, w context.CancelFunc, q *Manager) {
 		defer func() {
 			if err := recover(); err != nil {
-				q.log.Error("Panic occurred during manager tick: %s!", err)
+				slog.Error("Panic occurred during manager tick", "error", err)
 				w()
 			}
 		}()
@@ -279,70 +245,18 @@ func (m *Manager) startUpdate(x context.Context) {
 	}(c, f, m)
 	<-c.Done()
 	if c.Err() == context.DeadlineExceeded {
-		m.log.Warning("Collection update function ran over timeout of %s!", m.timeout.String())
+		slog.Warn("Collection update function ran over timeout", "timeout", m.timeout.String())
 	}
 	f()
 	atomic.StoreUint32(&m.running, 0)
 }
-func (t *tweets) update(x context.Context, m *Manager) {
-	var (
-		n = time.Now().Unix()
-		c = make([]tweet, 0, len(t.current))
-	)
-	for len(t.new) > 0 {
-		select {
-		case <-x.Done():
-			return
-		default:
-		}
-		var (
-			x = <-t.new
-			r = tweet{
-				ID:        uint64(x.ID),
-				User:      x.User.Name,
-				Text:      x.Text,
-				expire:    n + int64(t.timeout.Seconds()),
-				UserName:  x.User.ScreenName,
-				UserPhoto: x.User.ProfileImageURLHttps,
-			}
-		)
-		if x.Retweeted {
-			if len(r.Text) > 0 {
-				r.Text = r.Text + "\nRT @" + x.RetweetedStatus.User.ScreenName + ": " + x.RetweetedStatus.Text
-			} else {
-				r.Text = "RT @" + x.RetweetedStatus.User.ScreenName + ": " + x.RetweetedStatus.Text
-			}
-		}
-		if len(x.Entities.Media) > 0 {
-			r.Images = make([]string, 0, len(x.Entities.Media))
-			for i := range x.Entities.Media {
-				if x.Entities.Media[i].Type != "photo" {
-					continue
-				}
-				r.Images = append(r.Images, x.Entities.Media[i].MediaURLHttps)
-			}
-		}
-		c = append(c, r)
-	}
-	for i := range t.current {
-		select {
-		case <-x.Done():
-			return
-		default:
-		}
-		if t.current[i].expire > n {
-			c = append(c, t.current[i])
-		}
-		m.log.Debug("Removed Tweet ID \"%X\" due to timeout!", t.current[i].ID)
-	}
-	t.current = c
-}
+
 func (s *subscription) update(x context.Context, m *Manager) {
-	defer func(l logx.Log) {
+	defer func() {
 		if err := recover(); err != nil {
-			l.Error("Game subscription update function recovered from a panic: %s!", err)
+			slog.Error("Game subscription update function recovered from a panic", "error", err)
 		}
-	}(m.log)
+	}()
 	for len(s.new) > 0 {
 		s.clients = append(s.clients, &stream{<-s.new, true})
 	}
@@ -351,10 +265,10 @@ func (s *subscription) update(x context.Context, m *Manager) {
 		return
 	default:
 	}
-	m.log.Debug("Checking for update for subscribed Game %d..", s.ID)
+	slog.Debug("Checking for update for subscribed Game", "id", s.ID)
 	var g game
-	if err := m.getJSON(x, "api/scoreboard/"+strconv.FormatUint(s.ID, 10), &g); err != nil {
-		m.log.Error("Error retrieving data for Game ID %d: %s!", s.ID, err.Error())
+	if err := m.getJSON(x, "api/games/"+strconv.FormatUint(s.ID, 10)+"/scoreboard", &g); err != nil {
+		slog.Error("Error retrieving data for Game ID", "id", s.ID, "error", err.Error())
 		return
 	}
 	g.Meta.ID = s.ID
@@ -366,20 +280,17 @@ func (s *subscription) update(x context.Context, m *Manager) {
 			break
 		}
 	}
-	if m.twitter != nil {
-		g.Tweets = m.twitter.current
-	}
 	select {
 	case <-x.Done():
 		return
 	default:
 	}
 	var u []update
-	m.log.Debug("Running game comparison on Game %d..", s.ID)
+	slog.Debug("Running game comparison on Game", "id", s.ID)
 	s.cache, u = g.Delta(m.assets, &s.last)
 	s.last = g
 	if len(u) > 0 {
-		m.log.Debug("%d Updates detected in Game %d, updating clients..", len(u), s.ID)
+		slog.Debug("Updates detected in Game, updating clients", "updates_count", len(u), "id", s.ID)
 		r := make([]*stream, 0, len(s.clients))
 		for i := range s.clients {
 			select {
@@ -396,7 +307,7 @@ func (s *subscription) update(x context.Context, m *Manager) {
 			}
 			s.clients[i].ok = false
 			if err := s.clients[i].WriteJSON(u); err != nil {
-				m.log.Error(`Received error by client "%s", removing: %s!`, s.clients[i].RemoteAddr().String(), err.Error())
+				slog.Error("Received error by client, removing", "remote", s.clients[i].RemoteAddr().String(), "error", err.Error())
 				s.clients[i].Close()
 				continue
 			}
@@ -407,19 +318,15 @@ func (s *subscription) update(x context.Context, m *Manager) {
 	}
 }
 
-// Twitter creates and returns the Twitter channel. This channel can be used to submit Tweets to
-// be sent to the scoreboard.
-func (m *Manager) Twitter(t time.Duration) chan<- *twitter.Tweet {
-	m.twitter = &tweets{new: make(chan *twitter.Tweet), timeout: t}
-	return m.twitter.new
-}
 func (m Manager) get(x context.Context, u string) ([]byte, error) {
-	m.url.Path = path.Join(m.url.Path, u) + "/"
-	var (
-		c, f   = context.WithTimeout(x, m.timeout)
-		r, err = http.NewRequestWithContext(c, http.MethodGet, m.url.String(), nil)
-	)
+	reqUrl, err := url.Parse(m.url.String())
+	if err != nil {
+		return nil, err
+	}
+	reqUrl.Path = path.Join(reqUrl.Path, u)
+	c, f := context.WithTimeout(x, m.timeout)
 	defer f()
+	r, err := http.NewRequestWithContext(c, http.MethodGet, reqUrl.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -428,34 +335,34 @@ func (m Manager) get(x context.Context, u string) ([]byte, error) {
 		return nil, err
 	}
 	if o.Body == nil {
-		return nil, errors.New(`request "` + m.url.String() + `" returned an empty body`)
+		return nil, errors.New("request returned an empty body")
 	}
 	defer o.Body.Close()
 	if o.StatusCode >= 400 {
-		return nil, errors.New(`request "` + m.url.String() + `" returned status code ` + strconv.Itoa(o.StatusCode))
+		return nil, errors.New("request returned non-success status code: " + strconv.Itoa(o.StatusCode))
 	}
 	b, err := io.ReadAll(o.Body)
 	if err != nil {
-		return nil, errors.New(`error reading from the URL "` + m.url.String() + `": ` + err.Error())
+		return nil, err
 	}
 	return b, nil
 }
+
 func (m Manager) getJSON(x context.Context, u string, o interface{}) error {
 	r, err := m.get(x, u)
 	if err != nil {
 		return err
 	}
 	if err := json.Unmarshal(r, &o); err != nil {
-		return errors.New(`unable to unmarshal JSON from "` + u + `": ` + err.Error())
+		return err
 	}
 	return nil
 }
 
-// New creates a collection instance from the provided logger, timeout and API URL endpoint.
-func New(burl, d string, tick, t time.Duration, l logx.Log) (*Manager, error) {
-	u, err := parseurl.Parse(burl)
+func New(burl, d string, tick, t time.Duration) (*Manager, error) {
+	u, err := url.Parse(burl)
 	if err != nil {
-		return nil, errors.New(`could not unpack URL "` + burl + `": ` + err.Error())
+		return nil, err
 	}
 	if !u.IsAbs() {
 		u.Scheme = "http"
@@ -464,7 +371,6 @@ func New(burl, d string, tick, t time.Duration, l logx.Log) (*Manager, error) {
 		d = u.String()
 	}
 	m := &Manager{
-		log:    l,
 		url:    *u,
 		subs:   make(map[uint64]*subscription),
 		tick:   time.NewTicker(tick),
