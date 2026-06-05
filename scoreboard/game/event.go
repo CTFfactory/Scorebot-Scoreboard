@@ -18,6 +18,21 @@ package game
 
 import "strconv"
 
+type tweet struct {
+	ID        uint64   `json:"id"`
+	User      string   `json:"user"`
+	Text      string   `json:"text"`
+	expire    int64
+	UserName  string   `json:"username"`
+	UserPhoto string   `json:"photo"`
+	Images    []string `json:"images"`
+}
+
+func (t tweet) Sum() uint64 {
+	return t.ID
+}
+
+
 var (
 	emptyTweet  tweet
 	emptyEvents events
