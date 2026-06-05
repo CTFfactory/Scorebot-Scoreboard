@@ -20,6 +20,8 @@ if [ $# -ge 1 ]; then
     output="$1"
 fi
 
+mkdir -p "$(dirname "$output")"
+
 printf "Building..\n"
 bash -c "cd scoreboard; go build -trimpath -buildvcs=false -ldflags '-s -w -X github.com/PvJScorebot/scorebot-scoreboard/scoreboard.version=$(date +%F)_$(git rev-parse --short HEAD 2> /dev/null || echo "non-git")' -o \"$output\" cmd/main.go"
 
