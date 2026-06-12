@@ -246,7 +246,11 @@ func (g *game) Delta(s string, old *game) ([]update, []update) {
 			if g.Teams[i].Logo == "default.png" || len(g.Teams[i].Logo) == 0 {
 				g.Teams[i].Logo = "/image/team.png"
 			} else {
-				g.Teams[i].Logo = s + g.Teams[i].Logo
+				if len(s) > 0 && s[len(s)-1] != '/' && len(g.Teams[i].Logo) > 0 && g.Teams[i].Logo[0] != '/' {
+					g.Teams[i].Logo = s + "/" + g.Teams[i].Logo
+				} else {
+					g.Teams[i].Logo = s + g.Teams[i].Logo
+				}
 			}
 			g.Teams[i].Hash(h)
 		}
