@@ -105,6 +105,9 @@ func TestCmdlineHelpFlagPath(t *testing.T) {
 	if !strings.Contains(out, "Usage of scoreboard:") {
 		t.Fatalf("expected help usage output, got %q", out)
 	}
+	if strings.Count(out, "Usage of scoreboard:") != 1 {
+		t.Fatalf("expected help usage to be printed once, got %q", out)
+	}
 }
 
 func TestCmdlineVersionAndDefaults(t *testing.T) {
@@ -267,8 +270,19 @@ func TestParseFlagsDirect(t *testing.T) {
 			t.Fatalf("expected flag.ErrHelp, got %v", err)
 		}
 	})
-	if !strings.Contains(out, "Usage of scoreboard:") {
-		t.Fatalf("expected usage output, got %q", out)
+	if out != "" {
+		t.Fatalf("expected no stdout output for raw flag set, got %q", out)
+	}
+
+	os.Args = []string{"scoreboard", "-h"}
+	args, _, _, _ = newFlags(&config{})
+	out = captureStdout(t, func() {
+		if err := parseFlags(args); err != flag.ErrHelp {
+			t.Fatalf("expected flag.ErrHelp for -h, got %v", err)
+		}
+	})
+	if strings.Count(out, "Usage of scoreboard:") != 1 {
+		t.Fatalf("expected single usage output for -h, got %q", out)
 	}
 
 	os.Args = []string{"scoreboard"}

@@ -36,7 +36,7 @@ go test -cover ./...
 bash ./test-binary.sh
 ```
 
-The repository also includes `scoreboard/Makefile` targets for test, race, coverage, complexity, lint, vulnerability checks, and `binary-test`.
+The repository also includes `scoreboard/Makefile` targets for `build`, test, race, coverage, complexity, lint, vulnerability checks, and `binary-test`.
 
 ## CI/CD
 

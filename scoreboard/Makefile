@@ -1,7 +1,13 @@
 COVERAGE_THRESHOLD ?= 99
 COMPLEXITY_THRESHOLD ?= 6
+BUILD_OUTPUT ?= ../bin/scoreboard
+VERSION ?= $(shell date +%F)_$(shell git rev-parse --short HEAD 2>/dev/null || echo non-git)
 
-.PHONY: test race coverage complexity vuln lint audit binary-test
+.PHONY: build test race coverage complexity vuln lint audit binary-test
+
+build:
+	mkdir -p $(dir $(BUILD_OUTPUT))
+	go build -trimpath -buildvcs=false -ldflags "-s -w -X github.com/CTFfactory/Scorebot-Scoreboard/scoreboard.version=$(VERSION)" -o $(BUILD_OUTPUT) ./cmd/main.go
 
 test:
 	go test ./...

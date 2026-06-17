@@ -86,7 +86,6 @@ func newFlags(c *config) (*flag.FlagSet, *bool, *bool, *string) {
 
 func parseFlags(args *flag.FlagSet) error {
 	if err := args.Parse(os.Args[1:]); err != nil {
-		os.Stdout.WriteString(usage)
 		return flag.ErrHelp
 	}
 	return nil
