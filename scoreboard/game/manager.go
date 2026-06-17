@@ -28,6 +28,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -52,6 +53,7 @@ type Manager struct {
 	Games   []meta
 	timeout time.Duration
 	running uint32
+	mu      sync.RWMutex
 }
 
 type subscription struct {
@@ -64,6 +66,8 @@ type subscription struct {
 }
 
 func (m *Manager) close() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for n, s := range m.subs {
 		for i := range s.clients {
 			s.clients[i].Close()
@@ -96,6 +100,8 @@ func cleanSlugString(s string) string {
 }
 
 func (m *Manager) Game(s string) uint64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.active[strings.ToLower(cleanSlugString(s))]
 }
 
@@ -113,7 +119,9 @@ func (m *Manager) New(n *websocket.Conn) {
 		return
 	}
 	slog.Debug("Received Hello with requested Game ID", "id", h, "remote", n.RemoteAddr().String())
+	m.mu.RLock()
 	s, ok := m.subs[uint64(h)]
+	m.mu.RUnlock()
 	if !ok || s == nil {
 		slog.Debug("Checking Game ID requested by remote", "id", h, "remote", n.RemoteAddr().String())
 		var g game
@@ -129,6 +137,7 @@ func (m *Manager) New(n *websocket.Conn) {
 			return
 		}
 		g.Meta.ID = uint64(h)
+		m.mu.RLock()
 		for i := range m.Games {
 			if m.Games[i].ID == g.Meta.ID {
 				g.Meta.End = m.Games[i].End
@@ -137,18 +146,40 @@ func (m *Manager) New(n *websocket.Conn) {
 				break
 			}
 		}
-		s = &subscription{
-			ID:      g.Meta.ID,
-			new:     make(chan *websocket.Conn, 128),
-			last:    g,
-			clients: make([]*stream, 0, 1),
+		m.mu.RUnlock()
+		m.mu.Lock()
+		if r, ok := m.subs[g.Meta.ID]; ok && r != nil {
+			s = r
+		} else {
+			s = &subscription{
+				ID:      g.Meta.ID,
+				new:     make(chan *websocket.Conn, 128),
+				last:    g,
+				clients: make([]*stream, 0, 1),
+			}
+			s.cache, _ = s.last.Delta(m.assets, nil)
+			m.subs[g.Meta.ID] = s
 		}
-		s.cache, _ = s.last.Delta(m.assets, nil)
-		m.subs[g.Meta.ID] = s
+		m.mu.Unlock()
 	}
 	atomic.StoreUint32(&s.stale, 0)
-	_ = n.WriteJSON(s.cache)
-	s.new <- n
+	m.mu.RLock()
+	cache := append([]update(nil), s.cache...)
+	m.mu.RUnlock()
+	_ = n.WriteJSON(cache)
+	m.mu.Lock()
+	if r, ok := m.subs[s.ID]; !ok || r != s {
+		m.mu.Unlock()
+		n.Close()
+		return
+	}
+	select {
+	case s.new <- n:
+		m.mu.Unlock()
+	default:
+		m.mu.Unlock()
+		n.Close()
+	}
 }
 
 func (m *Manager) Start(x context.Context) {
@@ -167,10 +198,14 @@ func (m *Manager) Start(x context.Context) {
 
 func (m *Manager) update(x context.Context) {
 	slog.Debug("Starting update..")
-	if err := m.getJSON(x, "api/games", &m.Games); err != nil {
+	var games []meta
+	if err := m.getJSON(x, "api/games", &games); err != nil {
 		slog.Error("Error occurred during update tick", "error", err.Error())
 		return
 	}
+	m.mu.Lock()
+	m.Games = games
+	defer m.mu.Unlock()
 	for i := range m.Games {
 		n := cleanSlugString(m.Games[i].Name)
 		if !m.Games[i].Active() {
@@ -319,14 +354,14 @@ func (s *subscription) update(x context.Context, m *Manager) {
 }
 
 func (m Manager) get(x context.Context, u string) ([]byte, error) {
-	reqUrl, err := url.Parse(m.url.String())
+	reqURL, err := url.Parse(m.url.String())
 	if err != nil {
 		return nil, err
 	}
-	reqUrl.Path = path.Join(reqUrl.Path, u)
+	reqURL.Path = path.Join(reqURL.Path, u)
 	c, f := context.WithTimeout(x, m.timeout)
 	defer f()
-	r, err := http.NewRequestWithContext(c, http.MethodGet, reqUrl.String(), nil)
+	r, err := http.NewRequestWithContext(c, http.MethodGet, reqURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -353,7 +388,7 @@ func (m Manager) getJSON(x context.Context, u string, o interface{}) error {
 	if err != nil {
 		return err
 	}
-	if err := json.Unmarshal(r, &o); err != nil {
+	if err := json.Unmarshal(r, o); err != nil {
 		return err
 	}
 	return nil
