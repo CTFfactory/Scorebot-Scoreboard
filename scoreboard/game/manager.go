@@ -446,7 +446,22 @@ func (m *Manager) requestURL(endpoint string) (*url.URL, error) {
 		return nil, err
 	}
 	reqURL.Path = path.Join(reqURL.Path, endpoint)
+	if !strings.HasPrefix(reqURL.Path, "/") {
+		reqURL.Path = "/" + reqURL.Path
+	}
 	return reqURL, nil
+}
+
+func buildGetRequest(ctx context.Context, reqURL *url.URL) *http.Request {
+	return (&http.Request{
+		Method:     http.MethodGet,
+		URL:        reqURL,
+		Host:       reqURL.Host,
+		Header:     make(http.Header),
+		Proto:      "HTTP/1.1",
+		ProtoMajor: 1,
+		ProtoMinor: 1,
+	}).WithContext(ctx)
 }
 
 func (m *Manager) doRequest(ctx context.Context, endpoint string) (*http.Response, context.CancelFunc, error) {
@@ -455,11 +470,7 @@ func (m *Manager) doRequest(ctx context.Context, endpoint string) (*http.Respons
 		return nil, nil, err
 	}
 	c, f := context.WithTimeout(ctx, m.timeout)
-	r, err := http.NewRequestWithContext(c, http.MethodGet, reqURL.String(), nil)
-	if err != nil {
-		f()
-		return nil, nil, err
-	}
+	r := buildGetRequest(c, reqURL)
 	o, err := m.client.Do(r)
 	if err != nil {
 		f()

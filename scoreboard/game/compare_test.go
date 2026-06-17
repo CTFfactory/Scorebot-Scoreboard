@@ -165,3 +165,75 @@ func TestTeamSortHelpers(t *testing.T) {
 		t.Fatalf("expected Swap to exchange host positions")
 	}
 }
+
+func TestApplyTeamCompareBranches(t *testing.T) {
+	p := new(planner)
+	applyTeamCompare(p, 11, &delta{A: team{ID: 11}})
+	if !containsUpdateID(p.Delta, "team-t11") {
+		t.Fatalf("expected remove path to emit team-t11 update")
+	}
+
+	p = new(planner)
+	applyTeamCompare(p, 12, &delta{B: team{ID: 12, Name: "new"}})
+	if !containsUpdateID(p.Delta, "team-t12") {
+		t.Fatalf("expected add path to emit team-t12 update")
+	}
+
+	p = new(planner)
+	old := team{ID: 13, Name: "old"}
+	cur := team{ID: 13, Name: "cur"}
+	_ = old.Hash(new(hasher))
+	_ = cur.Hash(new(hasher))
+	applyTeamCompare(p, 13, &delta{A: old, B: cur})
+	if !containsUpdateID(p.Create, "team-t13") {
+		t.Fatalf("expected compare path to emit team-t13 create update")
+	}
+}
+
+func TestTeamMapHelpersCoverAllDeltaBranches(t *testing.T) {
+	p := new(planner)
+	previous := team{
+		ID:      1,
+		Name:    "old",
+		Hosts:   []host{{ID: 1, Name: "same"}, {ID: 3, Name: "removed"}},
+		Beacons: []beacon{{ID: 1, Team: 1, Color: "#111"}, {ID: 3, Team: 1, Color: "#333"}},
+	}
+	current := team{
+		ID:      1,
+		Name:    "new",
+		Hosts:   []host{{ID: 1, Name: "same-new"}, {ID: 2, Name: "added"}},
+		Beacons: []beacon{{ID: 1, Team: 1, Color: "#999"}, {ID: 2, Team: 1, Color: "#222"}},
+	}
+	current.compareHostsByMap(p, previous)
+	current.compareBeaconsByMap(p, previous)
+
+	if !containsUpdateID(p.Delta, "host-h3") {
+		t.Fatalf("expected removed host delta")
+	}
+	if !containsUpdateID(p.Delta, "beacon-con-b3") {
+		t.Fatalf("expected removed beacon delta")
+	}
+	if !containsUpdateID(p.Create, "host-h2") {
+		t.Fatalf("expected added host updates")
+	}
+	if !containsUpdateID(p.Create, "beacon-con-b2") {
+		t.Fatalf("expected added beacon updates")
+	}
+	if !containsUpdateID(p.Create, "host-h1") || !containsUpdateID(p.Create, "beacon-con-b1") {
+		t.Fatalf("expected compare path updates for existing host and beacon")
+	}
+}
+
+func TestHostWriteStateDeltaBranches(t *testing.T) {
+	p := new(planner)
+	host{Online: true}.writeStateDelta(p)
+	if len(p.Delta) == 0 || p.Delta[0].Value != "-offline" {
+		t.Fatalf("expected online host to emit -offline delta")
+	}
+
+	p = new(planner)
+	host{Online: false}.writeStateDelta(p)
+	if len(p.Delta) == 0 || p.Delta[0].Value != "+offline" {
+		t.Fatalf("expected offline host to emit +offline delta")
+	}
+}

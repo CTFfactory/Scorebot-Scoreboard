@@ -174,3 +174,53 @@ func TestCmdlineConfigVerifyAfterFileLoad(t *testing.T) {
 		t.Fatalf("expected default timeout 10s, got %v", s.ReadTimeout)
 	}
 }
+
+func TestParseFlagsDirect(t *testing.T) {
+	orig := os.Args
+	defer func() { os.Args = orig }()
+
+	os.Args = []string{"scoreboard", "-not-a-real-flag"}
+	args := flag.NewFlagSet("Scorebot Scoreboard", flag.ContinueOnError)
+	args.SetOutput(io.Discard)
+	out := captureStdout(t, func() {
+		if err := parseFlags(args); err != flag.ErrHelp {
+			t.Fatalf("expected flag.ErrHelp, got %v", err)
+		}
+	})
+	if !strings.Contains(out, "Usage of scoreboard:") {
+		t.Fatalf("expected usage output, got %q", out)
+	}
+
+	os.Args = []string{"scoreboard"}
+	args = flag.NewFlagSet("Scorebot Scoreboard", flag.ContinueOnError)
+	if err := parseFlags(args); err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+}
+
+func TestLoadConfigFileDirect(t *testing.T) {
+	var c config
+	if err := loadConfigFile(&c, ""); err != nil {
+		t.Fatalf("expected empty file path to be a no-op, got %v", err)
+	}
+
+	dir := t.TempDir()
+	good := filepath.Join(dir, "good.json")
+	if err := os.WriteFile(good, []byte(`{"scorebot":"http://example"}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := loadConfigFile(&c, good); err != nil {
+		t.Fatalf("loadConfigFile success path: %v", err)
+	}
+	if c.Scorebot != "http://example" {
+		t.Fatalf("expected scorebot field to be loaded, got %q", c.Scorebot)
+	}
+
+	bad := filepath.Join(dir, "bad.json")
+	if err := os.WriteFile(bad, []byte(`{"scorebot":`), 0o600); err != nil {
+		t.Fatalf("write bad config: %v", err)
+	}
+	if err := loadConfigFile(&c, bad); err == nil {
+		t.Fatalf("expected decode error for invalid config json")
+	}
+}

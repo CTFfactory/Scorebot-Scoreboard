@@ -191,6 +191,175 @@ func TestManagerGetAndJSONBehavior(t *testing.T) {
 	}
 }
 
+func TestManagerHelperFunctions(t *testing.T) {
+	t.Run("hydrate game meta", func(t *testing.T) {
+		now := time.Now().UTC()
+		m := &Manager{
+			Games: []meta{
+				{ID: 1, Start: now, End: now.Add(time.Hour), Status: running},
+			},
+		}
+		g := game{Meta: meta{ID: 1}}
+		m.hydrateGameMeta(&g)
+		if g.Meta.Status != running || g.Meta.Start.IsZero() || g.Meta.End.IsZero() {
+			t.Fatalf("expected game meta fields to be hydrated for matching ID")
+		}
+
+		other := game{Meta: meta{ID: 2, Status: paused}}
+		m.hydrateGameMeta(&other)
+		if other.Meta.Status != paused {
+			t.Fatalf("expected non-matching ID meta to remain unchanged")
+		}
+	})
+
+	t.Run("update active games locked", func(t *testing.T) {
+		m := &Manager{
+			active: map[string]uint64{
+				"inactive-game": 99,
+				"existing":      5,
+			},
+			Games: []meta{
+				{ID: 99, Name: "inactive game", Status: cancelled},
+				{ID: 5, Name: "existing", Status: running},
+				{ID: 7, Name: "new game", Status: running},
+			},
+		}
+		m.updateActiveGamesLocked()
+		if _, ok := m.active["inactive-game"]; ok {
+			t.Fatalf("expected inactive game mapping to be removed")
+		}
+		if m.active["existing"] != 5 {
+			t.Fatalf("expected existing active mapping to remain unchanged")
+		}
+		if m.active["new-game"] != 7 {
+			t.Fatalf("expected new active game mapping to be added")
+		}
+	})
+
+	t.Run("request/do/validate helpers", func(t *testing.T) {
+		m, err := New("http://example", "", time.Second, time.Second)
+		if err != nil {
+			t.Fatalf("manager new: %v", err)
+		}
+		reqURL, err := m.requestURL("api/games")
+		if err != nil {
+			t.Fatalf("requestURL success path failed: %v", err)
+		}
+		if !strings.Contains(reqURL.String(), "/api/games") {
+			t.Fatalf("expected joined path in request URL, got %q", reqURL.String())
+		}
+
+		m.url.Scheme = "%"
+		if _, err := m.requestURL("api/games"); err == nil {
+			t.Fatalf("expected requestURL parse error for invalid base URL path")
+		}
+
+		m2, err := New("http://example", "", time.Second, time.Second)
+		if err != nil {
+			t.Fatalf("manager new: %v", err)
+		}
+		m2.url.Scheme = "%"
+		if _, cancel, err := m2.doRequest(context.Background(), "api/games"); err == nil || cancel != nil {
+			t.Fatalf("expected doRequest requestURL error with nil cancel func")
+		}
+		m2.url.Scheme = "http"
+		m2.client = &http.Client{
+			Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+				return nil, errors.New("transport boom")
+			}),
+		}
+		if _, cancel, err := m2.doRequest(context.Background(), "api/games"); err == nil || cancel != nil {
+			t.Fatalf("expected doRequest transport error with nil cancel func")
+		}
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, "ok")
+		}))
+		defer srv.Close()
+		m3, err := New(srv.URL, "", time.Second, time.Second)
+		if err != nil {
+			t.Fatalf("manager new: %v", err)
+		}
+		resp, cancel, err := m3.doRequest(context.Background(), "api/games")
+		if err != nil {
+			t.Fatalf("expected doRequest success path: %v", err)
+		}
+		if cancel == nil {
+			t.Fatalf("expected non-nil cancel func on doRequest success")
+		}
+		_ = resp.Body.Close()
+		cancel()
+
+		if err := validateResponse(&http.Response{StatusCode: http.StatusOK}); err == nil {
+			t.Fatalf("expected validateResponse to fail on nil body")
+		}
+		if err := validateResponse(&http.Response{StatusCode: http.StatusBadGateway, Body: io.NopCloser(strings.NewReader("x"))}); err == nil {
+			t.Fatalf("expected validateResponse to fail on non-success status")
+		}
+		if err := validateResponse(&http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("x"))}); err != nil {
+			t.Fatalf("expected validateResponse success, got %v", err)
+		}
+	})
+
+	t.Run("queue client connection branches", func(t *testing.T) {
+		t.Run("success enqueue", func(t *testing.T) {
+			server, client, cleanup := websocketPair(t)
+			defer cleanup()
+			m := &Manager{subs: make(map[uint64]*subscription)}
+			s := &subscription{
+				ID:      1,
+				new:     make(chan *websocket.Conn, 1),
+				cache:   []update{{ID: "cached", Value: "v"}},
+				clients: make([]*stream, 0),
+			}
+			m.subs[1] = s
+			m.queueClientConnection(s, server)
+			if len(s.new) != 1 {
+				t.Fatalf("expected connection to be queued")
+			}
+			_ = client.SetReadDeadline(time.Now().Add(time.Second))
+			var payload []update
+			if err := client.ReadJSON(&payload); err != nil {
+				t.Fatalf("expected cached payload to be written: %v", err)
+			}
+			if len(payload) == 0 {
+				t.Fatalf("expected non-empty cached payload")
+			}
+		})
+
+		t.Run("subscription mismatch closes connection", func(t *testing.T) {
+			server, _, cleanup := websocketPair(t)
+			defer cleanup()
+			m := &Manager{subs: make(map[uint64]*subscription)}
+			target := &subscription{ID: 2, new: make(chan *websocket.Conn, 1)}
+			other := &subscription{ID: 2, new: make(chan *websocket.Conn, 1)}
+			m.subs[2] = other
+			m.queueClientConnection(target, server)
+			if len(target.new) != 0 || len(other.new) != 0 {
+				t.Fatalf("expected mismatch path to avoid enqueue")
+			}
+		})
+
+		t.Run("queue full drops connection", func(t *testing.T) {
+			server, _, cleanup := websocketPair(t)
+			defer cleanup()
+			m := &Manager{subs: make(map[uint64]*subscription)}
+			s := &subscription{
+				ID:      3,
+				new:     make(chan *websocket.Conn, 1),
+				cache:   []update{{ID: "cached", Value: "v"}},
+				clients: make([]*stream, 0),
+			}
+			s.new <- nil
+			m.subs[3] = s
+			m.queueClientConnection(s, server)
+			if len(s.new) != 1 {
+				t.Fatalf("expected queue to remain full")
+			}
+		})
+	})
+}
+
 func TestManagerNewWebsocketSubscription(t *testing.T) {
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
