@@ -220,6 +220,26 @@ func TestScoreboardListenWithoutTLS(t *testing.T) {
 	}
 }
 
+func TestScoreboardListenWithTLSFilesError(t *testing.T) {
+	s := &Scoreboard{
+		Server: &http.Server{
+			Addr:    "127.0.0.1:0",
+			Handler: http.NewServeMux(),
+		},
+		cert: "/path/that/does/not/exist-cert.pem",
+		key:  "/path/that/does/not/exist-key.pem",
+	}
+	called := false
+	var err error
+	s.listen(&err, func() { called = true })
+	if err == nil {
+		t.Fatalf("expected TLS listen error when cert/key files are missing")
+	}
+	if !called {
+		t.Fatalf("expected cancel callback to be invoked")
+	}
+}
+
 func TestScoreboardHTTPWebsocketUpgradeFailure(t *testing.T) {
 	s := &Scoreboard{
 		ws: &websocket.Upgrader{

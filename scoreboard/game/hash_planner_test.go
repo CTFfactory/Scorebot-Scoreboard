@@ -3,6 +3,9 @@ package game
 import "testing"
 
 type unknownHashType struct{}
+type localStringer struct{}
+
+func (localStringer) String() string { return "local-stringer" }
 
 func containsUpdateID(items []update, id string) bool {
 	for i := range items {
@@ -32,6 +35,33 @@ func TestHasherSupportedAndUnsupportedTypes(t *testing.T) {
 	}
 	if err := h.Hash(float64(3.14)); err != nil {
 		t.Fatalf("hash float64: %v", err)
+	}
+	if err := h.Hash(float32(1.5)); err != nil {
+		t.Fatalf("hash float32: %v", err)
+	}
+	if err := h.Hash(int8(-3)); err != nil {
+		t.Fatalf("hash int8: %v", err)
+	}
+	if err := h.Hash(uint8(3)); err != nil {
+		t.Fatalf("hash uint8: %v", err)
+	}
+	if err := h.Hash(int16(-7)); err != nil {
+		t.Fatalf("hash int16: %v", err)
+	}
+	if err := h.Hash(uint16(7)); err != nil {
+		t.Fatalf("hash uint16: %v", err)
+	}
+	if err := h.Hash(int32(-11)); err != nil {
+		t.Fatalf("hash int32: %v", err)
+	}
+	if err := h.Hash(int(13)); err != nil {
+		t.Fatalf("hash int: %v", err)
+	}
+	if err := h.Hash(uint(13)); err != nil {
+		t.Fatalf("hash uint: %v", err)
+	}
+	if err := h.Hash(localStringer{}); err != nil {
+		t.Fatalf("hash stringer: %v", err)
 	}
 	if h.Sum64() == 0 {
 		t.Fatalf("expected non-zero running hash")

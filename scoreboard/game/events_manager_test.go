@@ -233,3 +233,20 @@ func TestManagerUpdateAndLifecycle(t *testing.T) {
 		t.Fatalf("manager start did not stop after cancel")
 	}
 }
+
+func TestManagerClose(t *testing.T) {
+	m := &Manager{
+		subs: map[uint64]*subscription{
+			1: {
+				ID:      1,
+				new:     make(chan *websocket.Conn, 1),
+				clients: make([]*stream, 0),
+			},
+		},
+		tick: time.NewTicker(time.Hour),
+	}
+	m.close()
+	if len(m.subs) != 0 {
+		t.Fatalf("expected close to clear subscriptions")
+	}
+}

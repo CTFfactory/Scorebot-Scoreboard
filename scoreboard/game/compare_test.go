@@ -120,3 +120,19 @@ func TestTeamComparison(t *testing.T) {
 		t.Fatalf("expected no delta updates for equivalent team")
 	}
 }
+
+func TestTeamSortHelpers(t *testing.T) {
+	tm := team{
+		Hosts: []host{
+			{Name: "z-host"},
+			{Name: "a-host"},
+		},
+	}
+	if !tm.Less(1, 0) {
+		t.Fatalf("expected Less to compare host names lexicographically")
+	}
+	tm.Swap(0, 1)
+	if tm.Hosts[0].Name != "a-host" {
+		t.Fatalf("expected Swap to exchange host positions")
+	}
+}

@@ -353,7 +353,7 @@ func (s *subscription) update(x context.Context, m *Manager) {
 	}
 }
 
-func (m Manager) get(x context.Context, u string) ([]byte, error) {
+func (m *Manager) get(x context.Context, u string) ([]byte, error) {
 	reqURL, err := url.Parse(m.url.String())
 	if err != nil {
 		return nil, err
@@ -383,7 +383,7 @@ func (m Manager) get(x context.Context, u string) ([]byte, error) {
 	return b, nil
 }
 
-func (m Manager) getJSON(x context.Context, u string, o interface{}) error {
+func (m *Manager) getJSON(x context.Context, u string, o interface{}) error {
 	r, err := m.get(x, u)
 	if err != nil {
 		return err

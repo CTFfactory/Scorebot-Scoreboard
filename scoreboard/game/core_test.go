@@ -28,14 +28,33 @@ func TestHelloUnmarshalJSON(t *testing.T) {
 }
 
 func TestModeStatusMetaMethods(t *testing.T) {
-	if redBlue.String() != "Red vs Blue" {
-		t.Fatalf("unexpected mode string")
+	modeCases := map[mode]string{
+		redBlue:  "Red vs Blue",
+		blueBlue: "Blue vs Blue",
+		king:     "King of the Hill",
+		rush:     "Rush",
+		defend:   "Server Defence",
+	}
+	for k, want := range modeCases {
+		if got := k.String(); got != want {
+			t.Fatalf("mode %d expected %q got %q", k, want, got)
+		}
 	}
 	if mode(99).String() != "Unknown" {
 		t.Fatalf("unexpected unknown mode string")
 	}
-	if running.String() != "Running" {
-		t.Fatalf("unexpected status string")
+
+	statusCases := map[status]string{
+		stopped:   "Stopped",
+		running:   "Running",
+		paused:    "Paused",
+		cancelled: "Cancelled",
+		completed: "Completed",
+	}
+	for k, want := range statusCases {
+		if got := k.String(); got != want {
+			t.Fatalf("status %d expected %q got %q", k, want, got)
+		}
 	}
 	if status(99).String() != "Unknown" {
 		t.Fatalf("unexpected unknown status string")
@@ -81,6 +100,12 @@ func TestStateAndProtocolJSON(t *testing.T) {
 	if s != red {
 		t.Fatalf("unknown state should default to red")
 	}
+	if red.class() != "err" || yellow.class() != "warn" || state(255).class() != "port" {
+		t.Fatalf("unexpected state class mapping")
+	}
+	if red.String() != "rgb(255, 0, 0)" || yellow.String() != "rgb(173, 164, 21)" || state(255).String() != "rgb(255, 0, 0)" {
+		t.Fatalf("unexpected state color mapping")
+	}
 
 	var p protocol
 	if err := json.Unmarshal([]byte(`"udp"`), &p); err != nil {
@@ -94,6 +119,12 @@ func TestStateAndProtocolJSON(t *testing.T) {
 	}
 	if p != tcp {
 		t.Fatalf("unknown protocol should default to tcp")
+	}
+	if err := json.Unmarshal([]byte(`"icmp"`), &p); err != nil {
+		t.Fatalf("unmarshal icmp protocol: %v", err)
+	}
+	if p != icmp {
+		t.Fatalf("expected icmp protocol, got %v", p)
 	}
 	if protocol(255).String() != "Unknown" {
 		t.Fatalf("unexpected unknown protocol string")
