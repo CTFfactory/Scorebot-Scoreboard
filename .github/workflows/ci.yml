@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: scoreboard
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.4"
+          cache-dependency-path: scoreboard/go.sum
+
+      - name: Test
+        run: go test ./...
+
+      - name: Race tests
+        run: go test -race ./...
+
+      - name: Coverage gate (99%, non-blocking until suite is expanded)
+        continue-on-error: true
+        run: |
+          go test -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out | awk '/^total:/ {gsub("%", "", $3); if ($3 + 0 < 99) {printf("coverage %.1f%% is below threshold 99%%\n", $3 + 0); exit 1}}'
+
+      - name: Lint
+        run: |
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+          golangci-lint run ./...
+
+      - name: Complexity gate (<7, non-blocking until refactor approval)
+        continue-on-error: true
+        run: |
+          go install github.com/fzipp/gocyclo/cmd/gocyclo@latest
+          gocyclo -ignore "_test\\.go" -over 6 .
+
+      - name: Vulnerability scan
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
