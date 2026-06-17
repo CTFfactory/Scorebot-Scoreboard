@@ -33,14 +33,15 @@ cd scoreboard
 go test ./...
 go test -race ./...
 go test -cover ./...
+bash ./test-binary.sh
 ```
 
-The repository also includes `scoreboard/Makefile` targets for test, race, coverage, complexity, lint, and vulnerability checks.
+The repository also includes `scoreboard/Makefile` targets for test, race, coverage, complexity, lint, vulnerability checks, and `binary-test`.
 
 ## CI/CD
 
 - CI workflow: `.github/workflows/ci.yml`
-  - Runs tests, race tests, lint, complexity scan, coverage check, and vulnerability scan.
+  - Runs tests, race tests, binary integration script (`scoreboard/test-binary.sh`), lint, complexity scan, coverage check, and vulnerability scan.
   - Complexity and 99% coverage checks are currently configured as non-blocking until the approved refactor/test expansion work is completed.
 - Release workflow: `.github/workflows/release.yml`
   - Runs GoReleaser on `v*` tags using `.goreleaser.yml`.

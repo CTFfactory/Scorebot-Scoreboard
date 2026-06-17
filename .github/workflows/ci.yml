@@ -31,6 +31,9 @@ jobs:
       - name: Race tests
         run: go test -race ./...
 
+      - name: Binary integration test
+        run: bash ./test-binary.sh
+
       - name: Coverage gate (99%, non-blocking until suite is expanded)
         continue-on-error: true
         run: |

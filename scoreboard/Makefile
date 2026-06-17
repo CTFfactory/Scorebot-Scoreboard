@@ -1,7 +1,7 @@
 COVERAGE_THRESHOLD ?= 99
 COMPLEXITY_THRESHOLD ?= 6
 
-.PHONY: test race coverage complexity vuln lint audit
+.PHONY: test race coverage complexity vuln lint audit binary-test
 
 test:
 	go test ./...
@@ -23,3 +23,6 @@ lint:
 	golangci-lint run ./...
 
 audit: test race coverage complexity vuln lint
+
+binary-test:
+	bash ./test-binary.sh
