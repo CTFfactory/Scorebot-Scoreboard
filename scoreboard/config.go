@@ -21,7 +21,6 @@ import (
 	"flag"
 	"log/slog"
 	"os"
-
 )
 
 var version = "unknown"

@@ -97,7 +97,11 @@ func (h *hasher) Hash(v interface{}) error {
 		b[6], b[7] = byte(n>>8), byte(n)
 		h.Write(b)
 	case int8:
-		b[0] = uint8(i)
+		if i < 0 {
+			b[0] = byte(uint16(int16(i) + 256))
+		} else {
+			b[0] = byte(i)
+		}
 		h.Write(b[:1])
 	case uint8:
 		b[0] = i

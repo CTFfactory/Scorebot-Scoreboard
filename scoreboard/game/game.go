@@ -130,12 +130,12 @@ func (g game) Less(i, j int) bool {
 }
 func (m *meta) Hash(h *hasher) uint64 {
 	if m.hash == 0 {
-		h.Hash(m.ID)
-		h.Hash(m.Mode)
-		h.Hash(m.Name)
-		h.Hash(m.Status)
-		h.Hash(m.End.Unix())
-		h.Hash(m.Start.Unix())
+		_ = h.Hash(m.ID)
+		_ = h.Hash(m.Mode)
+		_ = h.Hash(m.Name)
+		_ = h.Hash(m.Status)
+		_ = h.Hash(m.End.Unix())
+		_ = h.Hash(m.Start.Unix())
 		m.hash = h.Segment()
 	}
 	return m.hash
@@ -239,7 +239,7 @@ func (g *game) Delta(s string, old *game) ([]update, []update) {
 	sort.Sort(g)
 	if g.hash == 0 {
 		h := hashers.Get().(*hasher)
-		h.Hash(g.Message)
+		_ = h.Hash(g.Message)
 		g.hash = h.Segment()
 		g.Meta.Hash(h)
 		for i := range g.Teams {

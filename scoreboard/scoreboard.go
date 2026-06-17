@@ -24,6 +24,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -33,7 +34,7 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/PvJScorebot/scorebot-scoreboard/scoreboard/game"
+	"github.com/CTFfactory/Scorebot-Scoreboard/scoreboard/game"
 	"github.com/gorilla/websocket"
 )
 
@@ -87,8 +88,8 @@ func (s *Scoreboard) Run() error {
 
 func (c config) New() (*Scoreboard, error) {
 	var (
-		t   = time.Second * time.Duration(c.Timeout)
-		err error
+		t    = time.Second * time.Duration(c.Timeout)
+		err  error
 		x, p string
 	)
 	if len(c.Directory) > 0 {
@@ -122,7 +123,7 @@ func (c config) New() (*Scoreboard, error) {
 		ReadHeaderTimeout: t,
 	}
 	s.ws = &websocket.Upgrader{
-		CheckOrigin:      func(_ *http.Request) bool { return true },
+		CheckOrigin:      checkWebSocketOrigin,
 		ReadBufferSize:   1024,
 		WriteBufferSize:  1024,
 		HandshakeTimeout: t,
@@ -164,6 +165,18 @@ func getTemplate(t *template.Template, d, f string) error {
 		return err
 	}
 	return nil
+}
+
+func checkWebSocketOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if len(origin) == 0 {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || len(u.Host) == 0 {
+		return false
+	}
+	return strings.EqualFold(u.Host, r.Host)
 }
 
 func (s *Scoreboard) listen(err *error, f context.CancelFunc) {
@@ -216,8 +229,8 @@ func (s *Scoreboard) http(w http.ResponseWriter, r *http.Request) {
 	case i < 0:
 		v = s.Game(n)
 	case strings.ToLower(n[:i]) == "game":
-		if x, err := strconv.Atoi(n[i+1:]); err == nil {
-			v = uint64(x)
+		if x, err := strconv.ParseUint(n[i+1:], 10, 64); err == nil {
+			v = x
 		}
 	}
 	if v == 0 {

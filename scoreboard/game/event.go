@@ -19,9 +19,9 @@ package game
 import "strconv"
 
 type tweet struct {
-	ID        uint64   `json:"id"`
-	User      string   `json:"user"`
-	Text      string   `json:"text"`
+	ID        uint64 `json:"id"`
+	User      string `json:"user"`
+	Text      string `json:"text"`
 	expire    int64
 	UserName  string   `json:"username"`
 	UserPhoto string   `json:"photo"`
@@ -31,7 +31,6 @@ type tweet struct {
 func (t tweet) Sum() uint64 {
 	return t.ID
 }
-
 
 var (
 	emptyTweet  tweet
@@ -56,11 +55,11 @@ func (e event) Sum() uint64 {
 func (e *events) Hash(h *hasher) uint64 {
 	if e.hash == 0 {
 		for i := range e.Current {
-			h.Hash(e.Current[i].ID)
-			h.Hash(e.Current[i].Type)
+			_ = h.Hash(e.Current[i].ID)
+			_ = h.Hash(e.Current[i].Type)
 			for k, v := range e.Current[i].Data {
-				h.Hash(k)
-				h.Hash(v)
+				_ = h.Hash(k)
+				_ = h.Hash(v)
 			}
 		}
 		e.hash = h.Segment()
@@ -103,7 +102,7 @@ func compareTweet(p *planner, n, o tweet) {
 func (g *game) hashTweets(h *hasher) uint64 {
 	if g.tweets == 0 {
 		for i := range g.Tweets {
-			h.Hash(g.Tweets[i].ID)
+			_ = h.Hash(g.Tweets[i].ID)
 		}
 		g.tweets = h.Segment()
 	}

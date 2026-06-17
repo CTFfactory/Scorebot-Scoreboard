@@ -118,8 +118,8 @@ func (p *planner) Remove(i interface{}) {
 }
 func (p *planner) RemoveEvent(i uint64, t uint8) {
 	p.Delta = append(p.Delta, update{
-		ID:     strconv.Itoa(int(i)),
-		Value:  strconv.Itoa(int(t)),
+		ID:     strconv.FormatUint(i, 10),
+		Value:  strconv.FormatUint(uint64(t), 10),
 		Event:  true,
 		Remove: true,
 	})
@@ -164,10 +164,10 @@ func (p *planner) DeltaProperty(i, v interface{}, s string) {
 }
 func (p *planner) Event(i uint64, t uint8, d map[string]string) {
 	p.Create = append(p.Create, update{
-		ID:    strconv.Itoa(int(i)),
+		ID:    strconv.FormatUint(i, 10),
 		Data:  d,
 		Event: true,
-		Value: strconv.Itoa(int(t)),
+		Value: strconv.FormatUint(uint64(t), 10),
 	})
 }
 func (p *planner) DeltaEvent(i uint64, t uint8, d map[string]string) {

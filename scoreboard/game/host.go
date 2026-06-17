@@ -98,9 +98,9 @@ func (p protocol) String() string {
 }
 func (h *host) Hash(i *hasher) uint64 {
 	if h.hash == 0 {
-		i.Hash(h.ID)
-		i.Hash(h.Name)
-		i.Hash(h.Online)
+		_ = i.Hash(h.ID)
+		_ = i.Hash(h.Name)
+		_ = i.Hash(h.Online)
 		h.hash = i.Segment()
 	}
 	h.total = h.hash
@@ -111,11 +111,11 @@ func (h *host) Hash(i *hasher) uint64 {
 }
 func (s *service) Hash(h *hasher) uint64 {
 	if s.hash == 0 {
-		h.Hash(s.ID)
-		h.Hash(s.Port)
-		h.Hash(s.State)
-		h.Hash(s.Bonus)
-		h.Hash(s.Protocol)
+		_ = h.Hash(s.ID)
+		_ = h.Hash(s.Port)
+		_ = h.Hash(s.State)
+		_ = h.Hash(s.Bonus)
+		_ = h.Hash(s.Protocol)
 		s.hash = h.Segment()
 	}
 	return s.hash

@@ -20,7 +20,7 @@ import (
 	"flag"
 	"os"
 
-	"github.com/PvJScorebot/scorebot-scoreboard/scoreboard"
+	"github.com/CTFfactory/Scorebot-Scoreboard/scoreboard"
 )
 
 func main() {

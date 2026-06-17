@@ -108,3 +108,28 @@ func TestConfigNewSuccess(t *testing.T) {
 		t.Fatalf("expected initialized scoreboard with server manager and websocket upgrader")
 	}
 }
+
+func TestCheckWebSocketOrigin(t *testing.T) {
+	req := &http.Request{
+		Host:   "example.com",
+		Header: make(http.Header),
+	}
+	if !checkWebSocketOrigin(req) {
+		t.Fatalf("expected empty origin to be allowed")
+	}
+
+	req.Header.Set("Origin", "https://example.com")
+	if !checkWebSocketOrigin(req) {
+		t.Fatalf("expected same-host origin to be allowed")
+	}
+
+	req.Header.Set("Origin", "https://other.example.com")
+	if checkWebSocketOrigin(req) {
+		t.Fatalf("expected mismatched host origin to be rejected")
+	}
+
+	req.Header.Set("Origin", "://bad-origin")
+	if checkWebSocketOrigin(req) {
+		t.Fatalf("expected invalid origin to be rejected")
+	}
+}

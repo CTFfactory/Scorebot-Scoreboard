@@ -65,12 +65,12 @@ func (t team) Less(i, j int) bool {
 }
 func (t *team) Hash(h *hasher) uint64 {
 	if t.hash == 0 {
-		h.Hash(t.ID)
-		h.Hash(t.Name)
-		h.Hash(t.Logo)
-		h.Hash(t.Color)
-		h.Hash(t.Offense)
-		h.Hash(t.Minimal)
+		_ = h.Hash(t.ID)
+		_ = h.Hash(t.Name)
+		_ = h.Hash(t.Logo)
+		_ = h.Hash(t.Color)
+		_ = h.Hash(t.Offense)
+		_ = h.Hash(t.Minimal)
 		t.hash = h.Segment()
 		sort.Sort(t)
 	}
@@ -88,9 +88,9 @@ func (t *team) Hash(h *hasher) uint64 {
 }
 func (b *beacon) Hash(h *hasher) uint64 {
 	if b.hash == 0 {
-		h.Hash(b.ID)
-		h.Hash(b.Team)
-		h.Hash(b.Color)
+		_ = h.Hash(b.ID)
+		_ = h.Hash(b.Team)
+		_ = h.Hash(b.Color)
 		b.hash = h.Segment()
 	}
 	return b.hash
