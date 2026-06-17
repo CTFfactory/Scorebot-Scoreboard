@@ -5,11 +5,14 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"text/template"
+
+	"github.com/CTFfactory/Scorebot-Scoreboard/scoreboard/game"
 )
 
 func TestGetTemplateEmbedded(t *testing.T) {
@@ -132,4 +135,67 @@ func TestCheckWebSocketOrigin(t *testing.T) {
 	if checkWebSocketOrigin(req) {
 		t.Fatalf("expected invalid origin to be rejected")
 	}
+}
+
+func TestScoreboardHTTPHandler(t *testing.T) {
+	tmpl := template.New("base")
+	template.Must(tmpl.New("home.html").Parse("HOME"))
+	template.Must(tmpl.New("scoreboard.html").Parse("SCORE {{.Game}}"))
+
+	s := &Scoreboard{
+		Manager: &game.Manager{},
+		html:    tmpl,
+		fs: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("X-Static", "1")
+			_, _ = w.Write([]byte("STATIC"))
+		}),
+	}
+
+	t.Run("reject non-get", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodPost, "/", nil)
+		w := httptest.NewRecorder()
+		s.http(w, r)
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("expected 405, got %d", w.Code)
+		}
+	})
+
+	t.Run("render home template", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		w := httptest.NewRecorder()
+		s.http(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		if body := w.Body.String(); body != "HOME" {
+			t.Fatalf("expected home template body, got %q", body)
+		}
+		if cors := w.Header().Get("Access-Control-Allow-Origin"); cors != "*" {
+			t.Fatalf("expected wildcard CORS header, got %q", cors)
+		}
+	})
+
+	t.Run("render scoreboard template by game id path", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodGet, "/game/123", nil)
+		w := httptest.NewRecorder()
+		s.http(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		if body := w.Body.String(); body != "SCORE 123" {
+			t.Fatalf("expected scoreboard template body, got %q", body)
+		}
+	})
+
+	t.Run("fallback to static handler", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodGet, "/game/not-a-number", nil)
+		w := httptest.NewRecorder()
+		s.http(w, r)
+		if body := w.Body.String(); body != "STATIC" {
+			t.Fatalf("expected static handler body, got %q", body)
+		}
+		if header := w.Header().Get("X-Static"); header != "1" {
+			t.Fatalf("expected static handler header, got %q", header)
+		}
+	})
 }
