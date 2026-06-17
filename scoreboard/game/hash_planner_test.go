@@ -129,15 +129,32 @@ func TestPlannerAndCompareHelpers(t *testing.T) {
 }
 
 func TestPrintStrConversions(t *testing.T) {
-	cases := map[string]string{
-		printStr("x"):        "x",
-		printStr(int64(-2)):  "-2",
-		printStr(uint64(9)):  "9",
-		printStr(float32(1)): "1.00",
+	cases := []struct {
+		in   interface{}
+		want string
+	}{
+		{[]byte("x"), "x"},
+		{"str", "str"},
+		{int(-1), "-1"},
+		{uint(1), "1"},
+		{int8(-2), "-2"},
+		{uint8(2), "2"},
+		{int16(-3), "-3"},
+		{uint16(3), "3"},
+		{int32(-4), "-4"},
+		{uint32(4), "4"},
+		{int64(-5), "-5"},
+		{uint64(5), "5"},
+		{float32(1.5), "1.50"},
+		{float64(2.5), "2.50"},
 	}
-	for got, want := range cases {
-		if got != want {
-			t.Fatalf("expected %q got %q", want, got)
+	for _, tc := range cases {
+		got := printStr(tc.in)
+		if got != tc.want {
+			t.Fatalf("expected %q got %q", tc.want, got)
 		}
+	}
+	if got := printStr(struct{}{}); got == "" {
+		t.Fatalf("expected non-empty fmt-based fallback formatting, got %q", got)
 	}
 }

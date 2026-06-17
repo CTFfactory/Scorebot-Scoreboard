@@ -3,14 +3,52 @@ package game
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+func websocketPair(t *testing.T) (*websocket.Conn, *websocket.Conn, func()) {
+	t.Helper()
+	serverConn := make(chan *websocket.Conn, 1)
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		up := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+		c, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		serverConn <- c
+	}))
+
+	wsURL := "ws" + strings.TrimPrefix(wsServer.URL, "http")
+	client, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		wsServer.Close()
+		t.Fatalf("dial websocket: %v", err)
+	}
+
+	select {
+	case server := <-serverConn:
+		cleanup := func() {
+			_ = client.Close()
+			_ = server.Close()
+			wsServer.Close()
+		}
+		return server, client, cleanup
+	case <-time.After(time.Second):
+		_ = client.Close()
+		wsServer.Close()
+		t.Fatalf("timeout waiting for server websocket connection")
+	}
+	return nil, nil, nil
+}
 
 func TestEventsHashAndCompare(t *testing.T) {
 	var h hasher
@@ -86,6 +124,14 @@ func TestManagerNewAndGameLookup(t *testing.T) {
 	m.active["te-am"] = 9
 	if got := m.Game("Te am"); got != 9 {
 		t.Fatalf("expected normalized game lookup to return 9, got %d", got)
+	}
+
+	m2, err := New("scorebot", "", time.Second, time.Second)
+	if err != nil {
+		t.Fatalf("manager new non-abs: %v", err)
+	}
+	if got := m2.url.String(); got != "http://scorebot" {
+		t.Fatalf("expected normalized non-abs URL, got %q", got)
 	}
 }
 
@@ -182,6 +228,126 @@ func TestManagerNewWebsocketSubscription(t *testing.T) {
 	}
 }
 
+func TestManagerNewErrorBranches(t *testing.T) {
+	t.Run("invalid hello payload", func(t *testing.T) {
+		m, err := New("http://scorebot", "", time.Second, time.Second)
+		if err != nil {
+			t.Fatalf("manager new: %v", err)
+		}
+		server, client, cleanup := websocketPair(t)
+		defer cleanup()
+		done := make(chan struct{})
+		go func() {
+			m.New(server)
+			close(done)
+		}()
+		if err := client.WriteMessage(websocket.TextMessage, []byte(`{"invalid":"payload"}`)); err != nil {
+			t.Fatalf("write invalid hello: %v", err)
+		}
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatalf("manager.New did not return on invalid hello payload")
+		}
+	})
+
+	t.Run("upstream score API error", func(t *testing.T) {
+		api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "boom", http.StatusInternalServerError)
+		}))
+		defer api.Close()
+
+		m, err := New(api.URL, "", time.Second, time.Second)
+		if err != nil {
+			t.Fatalf("manager new: %v", err)
+		}
+		server, client, cleanup := websocketPair(t)
+		defer cleanup()
+
+		done := make(chan struct{})
+		go func() {
+			m.New(server)
+			close(done)
+		}()
+		if err := client.WriteJSON(map[string]uint64{"game": 5}); err != nil {
+			t.Fatalf("write hello: %v", err)
+		}
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatalf("manager.New did not return after upstream error")
+		}
+		if len(m.subs) != 0 {
+			t.Fatalf("expected no subscriptions after upstream error")
+		}
+	})
+
+	t.Run("empty game payload", func(t *testing.T) {
+		api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, `{}`)
+		}))
+		defer api.Close()
+
+		m, err := New(api.URL, "", time.Second, time.Second)
+		if err != nil {
+			t.Fatalf("manager new: %v", err)
+		}
+		server, client, cleanup := websocketPair(t)
+		defer cleanup()
+
+		done := make(chan struct{})
+		go func() {
+			m.New(server)
+			close(done)
+		}()
+		if err := client.WriteJSON(map[string]uint64{"game": 3}); err != nil {
+			t.Fatalf("write hello: %v", err)
+		}
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatalf("manager.New did not return for empty game payload")
+		}
+		if len(m.subs) != 0 {
+			t.Fatalf("expected no subscriptions for empty game payload")
+		}
+	})
+
+	t.Run("full queue drops incoming conn", func(t *testing.T) {
+		m, err := New("http://scorebot", "", time.Second, time.Second)
+		if err != nil {
+			t.Fatalf("manager new: %v", err)
+		}
+		sub := &subscription{
+			ID:      1,
+			new:     make(chan *websocket.Conn, 1),
+			cache:   []update{{ID: "cached", Value: "1"}},
+			clients: make([]*stream, 0),
+		}
+		sub.new <- nil // fill channel to force default branch in New()
+		m.subs[1] = sub
+
+		server, client, cleanup := websocketPair(t)
+		defer cleanup()
+		done := make(chan struct{})
+		go func() {
+			m.New(server)
+			close(done)
+		}()
+		if err := client.WriteJSON(map[string]uint64{"game": 1}); err != nil {
+			t.Fatalf("write hello: %v", err)
+		}
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatalf("manager.New did not return when queue is full")
+		}
+		if len(sub.new) != 1 {
+			t.Fatalf("expected queue to remain full")
+		}
+	})
+}
+
 func TestManagerUpdateAndLifecycle(t *testing.T) {
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -249,4 +415,152 @@ func TestManagerClose(t *testing.T) {
 	if len(m.subs) != 0 {
 		t.Fatalf("expected close to clear subscriptions")
 	}
+}
+
+func TestManagerCloseWithClients(t *testing.T) {
+	server, client, cleanup := websocketPair(t)
+	defer cleanup()
+	m := &Manager{
+		subs: map[uint64]*subscription{
+			1: {
+				ID:  1,
+				new: make(chan *websocket.Conn, 1),
+				clients: []*stream{
+					{Conn: server, ok: true},
+				},
+			},
+		},
+		tick: time.NewTicker(time.Hour),
+	}
+	m.close()
+	_ = client.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if _, _, err := client.ReadMessage(); err == nil {
+		t.Fatalf("expected client connection to close")
+	}
+}
+
+func TestSubscriptionUpdatePaths(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/games/1/scoreboard":
+			_, _ = io.WriteString(w, `{"name":"Game One","mode":0,"teams":[{"id":1,"name":"Blue"}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer api.Close()
+
+	m, err := New(api.URL, "", time.Second, time.Second)
+	if err != nil {
+		t.Fatalf("manager new: %v", err)
+	}
+	m.Games = []meta{{ID: 1, Status: running}}
+
+	t.Run("drain queued connections and send updates", func(t *testing.T) {
+		server, client, cleanup := websocketPair(t)
+		defer cleanup()
+		s := &subscription{
+			ID:      1,
+			new:     make(chan *websocket.Conn, 1),
+			clients: make([]*stream, 0),
+		}
+		s.new <- server
+		s.update(context.Background(), m)
+		if len(s.clients) != 1 {
+			t.Fatalf("expected one active client after update, got %d", len(s.clients))
+		}
+		_ = client.SetReadDeadline(time.Now().Add(time.Second))
+		var u []update
+		if err := client.ReadJSON(&u); err != nil {
+			t.Fatalf("expected update payload to queued websocket client: %v", err)
+		}
+		if len(u) == 0 {
+			t.Fatalf("expected non-empty update payload")
+		}
+	})
+
+	t.Run("remove unhealthy clients", func(t *testing.T) {
+		server, client, cleanup := websocketPair(t)
+		defer cleanup()
+		_ = client.Close()
+		time.Sleep(10 * time.Millisecond)
+		s := &subscription{
+			ID:  1,
+			new: make(chan *websocket.Conn, 1),
+			clients: []*stream{
+				{Conn: server, ok: false},
+			},
+		}
+		s.update(context.Background(), m)
+		if len(s.clients) != 0 {
+			t.Fatalf("expected unhealthy client to be dropped")
+		}
+	})
+
+	t.Run("remove clients on write error", func(t *testing.T) {
+		server, client, cleanup := websocketPair(t)
+		defer cleanup()
+		_ = client.Close()
+		_ = server.Close()
+		s := &subscription{
+			ID:  1,
+			new: make(chan *websocket.Conn, 1),
+			clients: []*stream{
+				{Conn: server, ok: true},
+			},
+		}
+		s.update(context.Background(), m)
+		if len(s.clients) != 0 {
+			t.Fatalf("expected client removal on write failure")
+		}
+	})
+
+	t.Run("cancelled context exits early", func(t *testing.T) {
+		s := &subscription{
+			ID:      1,
+			new:     make(chan *websocket.Conn, 1),
+			clients: make([]*stream, 0),
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		s.update(ctx, m)
+	})
+}
+
+func TestManagerGetRequestBuildError(t *testing.T) {
+	m, err := New("http://scorebot", "", time.Second, time.Second)
+	if err != nil {
+		t.Fatalf("manager new: %v", err)
+	}
+	m.client = &http.Client{
+		Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			return nil, &net.AddrError{Err: "dial fail"}
+		}),
+	}
+	if _, err := m.get(context.Background(), "api/games"); err == nil {
+		t.Fatalf("expected client transport error")
+	}
+}
+
+func TestManagerStartUpdateDeadline(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(40 * time.Millisecond)
+		_, _ = io.WriteString(w, `[]`)
+	}))
+	defer api.Close()
+
+	m, err := New(api.URL, "", time.Millisecond, 5*time.Millisecond)
+	if err != nil {
+		t.Fatalf("manager new: %v", err)
+	}
+	m.startUpdate(context.Background())
+	if atomic.LoadUint32(&m.running) != 0 {
+		t.Fatalf("expected manager running flag reset")
+	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
 }

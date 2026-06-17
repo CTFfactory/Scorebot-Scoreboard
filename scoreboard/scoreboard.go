@@ -30,6 +30,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"text/template"
 	"time"
@@ -63,11 +64,12 @@ func (s *Scoreboard) Run() error {
 		err  error
 		w    = make(chan os.Signal, 1)
 		x, c = context.WithCancel(context.Background())
+		l    sync.Mutex
 	)
 	s.BaseContext = func(_ net.Listener) context.Context { return x }
 	signal.Notify(w, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	slog.Info("Starting Scoreboard service..")
-	go s.listen(&err, c)
+	go s.listen(&err, &l, c)
 	go s.Start(x)
 	select {
 	case <-w:
@@ -75,8 +77,12 @@ func (s *Scoreboard) Run() error {
 	}
 	signal.Stop(w)
 	close(w)
-	if c(); err != nil {
-		slog.Error("Received error during runtime", "error", err.Error())
+	c()
+	l.Lock()
+	runtimeErr := err
+	l.Unlock()
+	if runtimeErr != nil {
+		slog.Error("Received error during runtime", "error", runtimeErr.Error())
 	}
 	slog.Info("Stopping and shutting down..")
 	f, u := context.WithTimeout(x, s.ReadTimeout)
@@ -179,9 +185,11 @@ func checkWebSocketOrigin(r *http.Request) bool {
 	return strings.EqualFold(u.Host, r.Host)
 }
 
-func (s *Scoreboard) listen(err *error, f context.CancelFunc) {
+func (s *Scoreboard) listen(err *error, l *sync.Mutex, f context.CancelFunc) {
 	if len(s.cert) == 0 || len(s.key) == 0 {
+		l.Lock()
 		*err = s.ListenAndServe()
+		l.Unlock()
 		f()
 		return
 	}
@@ -198,7 +206,9 @@ func (s *Scoreboard) listen(err *error, f context.CancelFunc) {
 		},
 		CurvePreferences: []tls.CurveID{tls.CurveP256, tls.X25519},
 	}
+	l.Lock()
 	*err = s.ListenAndServeTLS(s.cert, s.key)
+	l.Unlock()
 	f()
 }
 

@@ -84,6 +84,10 @@ func TestModeStatusMetaMethods(t *testing.T) {
 	if !strings.Contains(out, "03:04 Jan 2 2026") || !strings.Contains(out, "04:05 Jan 2 2026") {
 		t.Fatalf("unexpected meta string output: %q", out)
 	}
+	m.End = time.Time{}
+	if one := m.String(); !strings.Contains(one, "03:04 Jan 2 2026") || strings.Contains(one, "to") {
+		t.Fatalf("unexpected single-time meta output: %q", one)
+	}
 }
 
 func TestStateAndProtocolJSON(t *testing.T) {
@@ -129,6 +133,60 @@ func TestStateAndProtocolJSON(t *testing.T) {
 	if protocol(255).String() != "Unknown" {
 		t.Fatalf("unexpected unknown protocol string")
 	}
+	if tcp.String() != "tcp" || icmp.String() != "icmp" {
+		t.Fatalf("unexpected protocol String output")
+	}
+}
+
+func TestStateAndProtocolAliasAndErrorInputs(t *testing.T) {
+	stateCases := []struct {
+		input string
+		want  state
+	}{
+		{`"r"`, red},
+		{`"fail"`, red},
+		{`"y"`, yellow},
+		{`"issue"`, yellow},
+		{`"g"`, green},
+		{`"ok"`, green},
+	}
+	for _, tc := range stateCases {
+		var s state
+		if err := json.Unmarshal([]byte(tc.input), &s); err != nil {
+			t.Fatalf("unmarshal state %s: %v", tc.input, err)
+		}
+		if s != tc.want {
+			t.Fatalf("state input %s expected %v got %v", tc.input, tc.want, s)
+		}
+	}
+	var badState state
+	if err := json.Unmarshal([]byte(`123`), &badState); err == nil {
+		t.Fatalf("expected state unmarshal type error")
+	}
+
+	protoCases := []struct {
+		input string
+		want  protocol
+	}{
+		{`"t"`, tcp},
+		{`"u"`, udp},
+		{`"i"`, icmp},
+		{`"p"`, icmp},
+		{`"ping"`, icmp},
+	}
+	for _, tc := range protoCases {
+		var p protocol
+		if err := json.Unmarshal([]byte(tc.input), &p); err != nil {
+			t.Fatalf("unmarshal protocol %s: %v", tc.input, err)
+		}
+		if p != tc.want {
+			t.Fatalf("protocol input %s expected %v got %v", tc.input, tc.want, p)
+		}
+	}
+	var badProtocol protocol
+	if err := json.Unmarshal([]byte(`123`), &badProtocol); err == nil {
+		t.Fatalf("expected protocol unmarshal type error")
+	}
 }
 
 func TestGameUnmarshalJSON(t *testing.T) {
@@ -149,6 +207,23 @@ func TestGameUnmarshalJSON(t *testing.T) {
 	}
 	if len(g.Teams) != 2 || len(g.Events.Current) != 1 {
 		t.Fatalf("unexpected teams/events counts")
+	}
+}
+
+func TestGameUnmarshalJSONErrors(t *testing.T) {
+	cases := []string{
+		`{"name":123}`,
+		`{"mode":"bad"}`,
+		`{"credit":123}`,
+		`{"message":123}`,
+		`{"teams":"bad"}`,
+		`{"events":"bad"}`,
+	}
+	for _, payload := range cases {
+		var g game
+		if err := json.Unmarshal([]byte(payload), &g); err == nil {
+			t.Fatalf("expected unmarshal error for payload %s", payload)
+		}
 	}
 }
 
