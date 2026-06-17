@@ -11,8 +11,10 @@ import (
 	"strings"
 	"testing"
 	"text/template"
+	"time"
 
 	"github.com/CTFfactory/Scorebot-Scoreboard/scoreboard/game"
+	"github.com/gorilla/websocket"
 )
 
 func TestGetTemplateEmbedded(t *testing.T) {
@@ -198,4 +200,54 @@ func TestScoreboardHTTPHandler(t *testing.T) {
 			t.Fatalf("expected static handler header, got %q", header)
 		}
 	})
+}
+
+func TestScoreboardListenWithoutTLS(t *testing.T) {
+	s := &Scoreboard{
+		Server: &http.Server{
+			Addr:    "invalid-listen-address",
+			Handler: http.NewServeMux(),
+		},
+	}
+	called := false
+	var err error
+	s.listen(&err, func() { called = true })
+	if err == nil {
+		t.Fatalf("expected listen error for invalid address")
+	}
+	if !called {
+		t.Fatalf("expected cancel callback to be invoked")
+	}
+}
+
+func TestScoreboardHTTPWebsocketUpgradeFailure(t *testing.T) {
+	s := &Scoreboard{
+		ws: &websocket.Upgrader{
+			CheckOrigin: func(*http.Request) bool { return true },
+		},
+	}
+	r := httptest.NewRequest(http.MethodGet, "/w", nil)
+	w := httptest.NewRecorder()
+	s.httpWebsocket(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 on invalid websocket upgrade, got %d", w.Code)
+	}
+}
+
+func TestScoreboardRunWhenListenFails(t *testing.T) {
+	m, err := game.New("http://127.0.0.1:1", "", time.Millisecond, 20*time.Millisecond)
+	if err != nil {
+		t.Fatalf("manager new: %v", err)
+	}
+	s := &Scoreboard{
+		Manager: m,
+		Server: &http.Server{
+			Addr:        "invalid-listen-address",
+			Handler:     http.NewServeMux(),
+			ReadTimeout: 20 * time.Millisecond,
+		},
+	}
+	if err := s.Run(); err != nil {
+		t.Fatalf("expected nil shutdown error on listen failure path, got %v", err)
+	}
 }

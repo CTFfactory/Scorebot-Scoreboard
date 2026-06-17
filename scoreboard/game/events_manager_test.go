@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 func TestEventsHashAndCompare(t *testing.T) {
@@ -131,5 +133,103 @@ func TestManagerGetAndJSONBehavior(t *testing.T) {
 
 	if err := m.getJSON(context.Background(), "invalid", &out); err == nil {
 		t.Fatalf("expected JSON decode error")
+	}
+}
+
+func TestManagerNewWebsocketSubscription(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/games/1/scoreboard":
+			_, _ = io.WriteString(w, `{"name":"Game One","mode":0,"teams":[{"id":1,"name":"Blue"}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer api.Close()
+
+	m, err := New(api.URL, "", time.Second, time.Second)
+	if err != nil {
+		t.Fatalf("manager new: %v", err)
+	}
+
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		up := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+		c, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		m.New(c)
+	}))
+	defer wsServer.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(wsServer.URL, "http")
+	client, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer client.Close()
+
+	if err := client.WriteJSON(map[string]uint64{"game": 1}); err != nil {
+		t.Fatalf("write hello: %v", err)
+	}
+	var u []update
+	if err := client.ReadJSON(&u); err != nil {
+		t.Fatalf("read initial cache: %v", err)
+	}
+	if len(u) == 0 {
+		t.Fatalf("expected initial cache updates")
+	}
+}
+
+func TestManagerUpdateAndLifecycle(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/games":
+			_, _ = io.WriteString(w, `[{"id":1,"name":"Game One","mode":0,"status":1}]`)
+		case "/api/games/1/scoreboard":
+			_, _ = io.WriteString(w, `{"name":"Game One","mode":0,"teams":[{"id":1,"name":"Blue"}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer api.Close()
+
+	m, err := New(api.URL, "", time.Millisecond, time.Second)
+	if err != nil {
+		t.Fatalf("manager new: %v", err)
+	}
+
+	m.subs[1] = &subscription{
+		ID:      1,
+		new:     make(chan *websocket.Conn, 1),
+		clients: make([]*stream, 0),
+	}
+
+	m.update(context.Background())
+	if len(m.Games) != 1 {
+		t.Fatalf("expected one game after update")
+	}
+	if len(m.subs) != 1 {
+		t.Fatalf("expected stale-marked subscription to remain after first pass")
+	}
+
+	m.update(context.Background())
+	if len(m.subs) != 0 {
+		t.Fatalf("expected stale subscription cleanup after second pass")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		m.Start(ctx)
+		close(done)
+	}()
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("manager start did not stop after cancel")
 	}
 }

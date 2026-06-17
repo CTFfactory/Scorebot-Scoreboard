@@ -84,3 +84,13 @@ func TestMainInvalidFlag(t *testing.T) {
 		t.Fatalf("expected invalid-flag error output, got %q", errOut)
 	}
 }
+
+func TestMainStartupErrorPath(t *testing.T) {
+	code, _, errOut := runMain(t, "-c", "/path/that/does/not/exist.json")
+	if code != 1 {
+		t.Fatalf("expected exit code 1 for startup error path, got %d", code)
+	}
+	if !strings.Contains(errOut, "Error during startup:") {
+		t.Fatalf("expected startup error output, got %q", errOut)
+	}
+}
