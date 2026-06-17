@@ -1,0 +1,113 @@
+package game
+
+import "testing"
+
+type unknownHashType struct{}
+
+func containsUpdateID(items []update, id string) bool {
+	for i := range items {
+		if items[i].ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func TestHasherSupportedAndUnsupportedTypes(t *testing.T) {
+	h := new(hasher)
+	if err := h.Hash(true); err != nil {
+		t.Fatalf("hash bool: %v", err)
+	}
+	if err := h.Hash("abc"); err != nil {
+		t.Fatalf("hash string: %v", err)
+	}
+	if err := h.Hash([]byte{1, 2, 3}); err != nil {
+		t.Fatalf("hash bytes: %v", err)
+	}
+	if err := h.Hash(int64(42)); err != nil {
+		t.Fatalf("hash int64: %v", err)
+	}
+	if err := h.Hash(uint32(7)); err != nil {
+		t.Fatalf("hash uint32: %v", err)
+	}
+	if err := h.Hash(float64(3.14)); err != nil {
+		t.Fatalf("hash float64: %v", err)
+	}
+	if h.Sum64() == 0 {
+		t.Fatalf("expected non-zero running hash")
+	}
+	if seg := h.Segment(); seg == 0 {
+		t.Fatalf("expected non-zero segment")
+	}
+	h.Reset()
+	if h.Sum64() != fnvStart {
+		t.Fatalf("expected reset sum %d, got %d", uint64(fnvStart), h.Sum64())
+	}
+	if err := h.Hash(unknownHashType{}); err == nil {
+		t.Fatalf("expected unsupported type error")
+	}
+}
+
+func TestUpdateFnvDeterministic(t *testing.T) {
+	in := []byte("same-input")
+	a := updateFnv(fnvStart, in)
+	b := updateFnv(fnvStart, in)
+	if a != b {
+		t.Fatalf("expected deterministic fnv values, got %d and %d", a, b)
+	}
+}
+
+func TestPlannerAndCompareHelpers(t *testing.T) {
+	var (
+		p planner
+		c = make(compare)
+	)
+	c.One(tweet{ID: 1})
+	c.Two(tweet{ID: 1})
+	c.Two(tweet{ID: 2})
+
+	if !c[1].First() || !c[1].Second() {
+		t.Fatalf("expected compare pair for id 1")
+	}
+	if c[2].First() || !c[2].Second() {
+		t.Fatalf("expected second-only compare pair for id 2")
+	}
+
+	p.Prefix("root")
+	p.Value("k", "v", "cls")
+	p.Property("k2", "v2", "style")
+	p.DeltaValue("k3", "v3", "cls3")
+	p.DeltaProperty("k4", "v4", "style4")
+	p.Remove("gone")
+	p.Event(1, 2, map[string]string{"a": "b"})
+	p.DeltaEvent(2, 3, map[string]string{"c": "d"})
+	p.RemoveEvent(3, 4)
+	p.rollbackPrefix()
+
+	if len(p.Create) == 0 {
+		t.Fatalf("expected create updates")
+	}
+	if len(p.Delta) == 0 {
+		t.Fatalf("expected delta updates")
+	}
+	if p.prefix != "" {
+		t.Fatalf("expected prefix rollback to empty")
+	}
+	if !containsUpdateID(p.Delta, "root-gone") {
+		t.Fatalf("expected remove update id root-gone")
+	}
+}
+
+func TestPrintStrConversions(t *testing.T) {
+	cases := map[string]string{
+		printStr("x"):        "x",
+		printStr(int64(-2)):  "-2",
+		printStr(uint64(9)):  "9",
+		printStr(float32(1)): "1.00",
+	}
+	for got, want := range cases {
+		if got != want {
+			t.Fatalf("expected %q got %q", want, got)
+		}
+	}
+}
