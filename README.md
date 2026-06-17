@@ -42,7 +42,7 @@ The repository also includes `scoreboard/Makefile` targets for test, race, cover
 
 - CI workflow: `.github/workflows/ci.yml`
   - Runs tests, race tests, binary integration script (`scoreboard/test-binary.sh`), lint, complexity scan, coverage check, and vulnerability scan.
-  - Complexity and 99% coverage checks are currently configured as non-blocking until the approved refactor/test expansion work is completed.
+  - 99% coverage check is currently configured as non-blocking while the remaining coverage expansion work is completed.
 - Release workflow: `.github/workflows/release.yml`
   - Runs GoReleaser on `v*` tags using `.goreleaser.yml`.
 

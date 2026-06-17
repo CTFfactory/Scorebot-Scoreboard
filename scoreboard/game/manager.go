@@ -440,34 +440,58 @@ func (s *subscription) update(x context.Context, m *Manager) {
 	}
 }
 
-func (m *Manager) get(x context.Context, u string) ([]byte, error) {
+func (m *Manager) requestURL(endpoint string) (*url.URL, error) {
 	reqURL, err := url.Parse(m.url.String())
 	if err != nil {
 		return nil, err
 	}
-	reqURL.Path = path.Join(reqURL.Path, u)
-	c, f := context.WithTimeout(x, m.timeout)
-	defer f()
+	reqURL.Path = path.Join(reqURL.Path, endpoint)
+	return reqURL, nil
+}
+
+func (m *Manager) doRequest(ctx context.Context, endpoint string) (*http.Response, context.CancelFunc, error) {
+	reqURL, err := m.requestURL(endpoint)
+	if err != nil {
+		return nil, nil, err
+	}
+	c, f := context.WithTimeout(ctx, m.timeout)
 	r, err := http.NewRequestWithContext(c, http.MethodGet, reqURL.String(), nil)
 	if err != nil {
-		return nil, err
+		f()
+		return nil, nil, err
 	}
 	o, err := m.client.Do(r)
 	if err != nil {
-		return nil, err
+		f()
+		return nil, nil, err
 	}
+	return o, f, nil
+}
+
+func validateResponse(o *http.Response) error {
 	if o.Body == nil {
-		return nil, errors.New("request returned an empty body")
+		return errors.New("request returned an empty body")
 	}
-	defer o.Body.Close()
 	if o.StatusCode >= 400 {
-		return nil, errors.New("request returned non-success status code: " + strconv.Itoa(o.StatusCode))
+		return errors.New("request returned non-success status code: " + strconv.Itoa(o.StatusCode))
 	}
-	b, err := io.ReadAll(o.Body)
+	return nil
+}
+
+func (m *Manager) get(x context.Context, u string) ([]byte, error) {
+	o, f, err := m.doRequest(x, u)
 	if err != nil {
 		return nil, err
 	}
-	return b, nil
+	defer f()
+	if err := validateResponse(o); err != nil {
+		if o.Body != nil {
+			o.Body.Close()
+		}
+		return nil, err
+	}
+	defer o.Body.Close()
+	return io.ReadAll(o.Body)
 }
 
 func (m *Manager) getJSON(x context.Context, u string, o interface{}) error {

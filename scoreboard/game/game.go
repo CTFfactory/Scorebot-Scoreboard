@@ -207,7 +207,7 @@ func (g *game) compareMetaEventsTweets(p *planner, old *game) {
 	g.compareTweets(p, old)
 }
 
-func (g *game) compareTeamsByMap(p *planner, old *game) {
+func (g *game) teamCompareMap(old *game) compare {
 	c := make(compare)
 	if old != nil {
 		for i := range old.Teams {
@@ -217,15 +217,24 @@ func (g *game) compareTeamsByMap(p *planner, old *game) {
 	for i := range g.Teams {
 		c.Two(g.Teams[i])
 	}
+	return c
+}
+
+func applyTeamCompare(p *planner, k uint64, v *delta) {
+	switch {
+	case !v.Second():
+		p.Remove("team-t" + strconv.FormatUint(k, 10))
+	case !v.First():
+		v.B.(team).Compare(p, emptyTeam)
+	default:
+		v.B.(team).Compare(p, v.A.(team))
+	}
+}
+
+func (g *game) compareTeamsByMap(p *planner, old *game) {
+	c := g.teamCompareMap(old)
 	for k, v := range c {
-		switch {
-		case !v.Second():
-			p.Remove("team-t" + strconv.FormatUint(k, 10))
-		case !v.First():
-			v.B.(team).Compare(p, emptyTeam)
-		default:
-			v.B.(team).Compare(p, v.A.(team))
-		}
+		applyTeamCompare(p, k, v)
 	}
 }
 

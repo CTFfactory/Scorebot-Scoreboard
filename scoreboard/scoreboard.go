@@ -59,6 +59,50 @@ type Scoreboard struct {
 	expire time.Duration
 }
 
+func configDirectoryPaths(directory string) (templateDir, publicDir string, err error) {
+	if len(directory) == 0 {
+		return "", "", nil
+	}
+	publicDir = filepath.Join(directory, "public")
+	d, err := os.Stat(publicDir)
+	if err != nil {
+		return "", "", err
+	}
+	if !d.IsDir() {
+		return "", "", fs.ErrInvalid
+	}
+	return filepath.Join(directory, "template"), publicDir, nil
+}
+
+func loadCoreTemplates(t *template.Template, directory string) error {
+	for _, name := range []string{"home.html", "scoreboard.html"} {
+		if err := getTemplate(t, directory, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func newHTTPServer(addr string, timeout time.Duration) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           new(http.ServeMux),
+		ReadTimeout:       timeout,
+		IdleTimeout:       timeout,
+		WriteTimeout:      timeout,
+		ReadHeaderTimeout: timeout,
+	}
+}
+
+func newWebSocketUpgrader(timeout time.Duration) *websocket.Upgrader {
+	return &websocket.Upgrader{
+		CheckOrigin:      checkWebSocketOrigin,
+		ReadBufferSize:   1024,
+		WriteBufferSize:  1024,
+		HandshakeTimeout: timeout,
+	}
+}
+
 func (s *Scoreboard) Run() error {
 	var (
 		err  error
@@ -93,49 +137,24 @@ func (s *Scoreboard) Run() error {
 }
 
 func (c config) New() (*Scoreboard, error) {
-	var (
-		t    = time.Second * time.Duration(c.Timeout)
-		err  error
-		x, p string
-	)
-	if len(c.Directory) > 0 {
-		p = filepath.Join(c.Directory, "public")
-		var d fs.FileInfo
-		if d, err = os.Stat(p); err != nil {
-			return nil, err
-		}
-		if !d.IsDir() {
-			return nil, fs.ErrInvalid
-		}
-		x = filepath.Join(c.Directory, "template")
+	timeout := time.Second * time.Duration(c.Timeout)
+	templateDir, publicDir, err := configDirectoryPaths(c.Directory)
+	if err != nil {
+		return nil, err
 	}
 	var s Scoreboard
 	s.html = template.New("base")
-	if err = getTemplate(s.html, x, "home.html"); err != nil {
+	if err := loadCoreTemplates(s.html, templateDir); err != nil {
 		return nil, err
 	}
-	if err = getTemplate(s.html, x, "scoreboard.html"); err != nil {
+	s.Manager, err = game.New(c.Scorebot, c.Assets, time.Duration(c.Tick)*time.Second, timeout)
+	if err != nil {
 		return nil, err
 	}
-	if s.Manager, err = game.New(c.Scorebot, c.Assets, time.Duration(c.Tick)*time.Second, t); err != nil {
-		return nil, err
-	}
-	s.Server = &http.Server{
-		Addr:              c.Listen,
-		Handler:           new(http.ServeMux),
-		ReadTimeout:       t,
-		IdleTimeout:       t,
-		WriteTimeout:      t,
-		ReadHeaderTimeout: t,
-	}
-	s.ws = &websocket.Upgrader{
-		CheckOrigin:      checkWebSocketOrigin,
-		ReadBufferSize:   1024,
-		WriteBufferSize:  1024,
-		HandshakeTimeout: t,
-	}
+	s.Server = newHTTPServer(c.Listen, timeout)
+	s.ws = newWebSocketUpgrader(timeout)
 	s.key, s.cert = c.Key, c.Cert
-	s.fs, s.dir = http.FileServer(http.FS(&s)), http.Dir(p)
+	s.fs, s.dir = http.FileServer(http.FS(&s)), http.Dir(publicDir)
 	s.Server.Handler.(*http.ServeMux).HandleFunc("/", s.http)
 	s.Server.Handler.(*http.ServeMux).HandleFunc("/w", s.httpWebsocket)
 	return &s, nil
@@ -154,15 +173,32 @@ func (s *Scoreboard) Open(n string) (fs.File, error) {
 }
 
 func getTemplate(t *template.Template, d, f string) error {
-	if len(d) > 0 {
-		s := filepath.Join(d, f)
-		if i, err := os.Stat(s); err == nil && !i.IsDir() {
-			if _, err = t.New(f).ParseFiles(s); err != nil {
-				return err
-			}
-			return nil
-		}
+	parsed, err := parseOverrideTemplate(t, d, f)
+	if err != nil {
+		return err
 	}
+	if parsed {
+		return nil
+	}
+	return parseEmbeddedTemplate(t, f)
+}
+
+func parseOverrideTemplate(t *template.Template, d, f string) (bool, error) {
+	if len(d) == 0 {
+		return false, nil
+	}
+	s := filepath.Join(d, f)
+	i, err := os.Stat(s)
+	if err != nil || i.IsDir() {
+		return false, nil
+	}
+	if _, err := t.New(f).ParseFiles(s); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func parseEmbeddedTemplate(t *template.Template, f string) error {
 	b, err := resources.ReadFile("html/template/" + f)
 	if err != nil {
 		return err

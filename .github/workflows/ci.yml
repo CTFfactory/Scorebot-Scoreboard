@@ -45,8 +45,7 @@ jobs:
           go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
           golangci-lint run ./...
 
-      - name: Complexity gate (<7, non-blocking until refactor approval)
-        continue-on-error: true
+      - name: Complexity gate (<7)
         run: |
           go install github.com/fzipp/gocyclo/cmd/gocyclo@latest
           gocyclo -ignore "_test\\.go" -over 6 .

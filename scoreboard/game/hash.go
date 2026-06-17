@@ -128,30 +128,53 @@ func (h *hasher) hashFloat(v interface{}, b []byte) bool {
 	return true
 }
 
-func (h *hasher) hashSmallInt(v interface{}, b []byte) bool {
+func (h *hasher) hashInt8orUint8(v interface{}, b []byte) bool {
 	switch i := v.(type) {
 	case int8:
 		b[0] = byte(i)
-		h.Write(b[:1])
 	case uint8:
 		b[0] = i
-		h.Write(b[:1])
-	case int16:
-		writeUint16Bytes(b, uint16(i))
-		h.Write(b[:2])
-	case uint16:
-		writeUint16Bytes(b, i)
-		h.Write(b[:2])
-	case int32:
-		writeUint32Bytes(b, uint32(i))
-		h.Write(b[:4])
-	case uint32:
-		writeUint32Bytes(b, i)
-		h.Write(b[:4])
 	default:
 		return false
 	}
+	h.Write(b[:1])
 	return true
+}
+
+func (h *hasher) hashInt16orUint16(v interface{}, b []byte) bool {
+	switch i := v.(type) {
+	case int16:
+		writeUint16Bytes(b, uint16(i))
+	case uint16:
+		writeUint16Bytes(b, i)
+	default:
+		return false
+	}
+	h.Write(b[:2])
+	return true
+}
+
+func (h *hasher) hashInt32orUint32(v interface{}, b []byte) bool {
+	switch i := v.(type) {
+	case int32:
+		writeUint32Bytes(b, uint32(i))
+	case uint32:
+		writeUint32Bytes(b, i)
+	default:
+		return false
+	}
+	h.Write(b[:4])
+	return true
+}
+
+func (h *hasher) hashSmallInt(v interface{}, b []byte) bool {
+	if h.hashInt8orUint8(v, b) {
+		return true
+	}
+	if h.hashInt16orUint16(v, b) {
+		return true
+	}
+	return h.hashInt32orUint32(v, b)
 }
 
 func (h *hasher) hashLargeInt(v interface{}, b []byte) bool {
