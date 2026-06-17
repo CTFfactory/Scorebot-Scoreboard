@@ -82,6 +82,35 @@ func TestHostServiceAndBeaconComparison(t *testing.T) {
 	}
 }
 
+func TestHostCompareServiceRemovalPath(t *testing.T) {
+	var h hasher
+	old := host{
+		ID:     55,
+		Name:   "host-b",
+		Online: false,
+		Services: []service{
+			{ID: 1, Port: 80, State: green, Protocol: tcp},
+			{ID: 2, Port: 443, State: yellow, Protocol: tcp},
+		},
+	}
+	cur := host{
+		ID:     55,
+		Name:   "host-b",
+		Online: false,
+		Services: []service{
+			{ID: 1, Port: 80, State: green, Protocol: tcp},
+		},
+	}
+	_ = old.Hash(&h)
+	_ = cur.Hash(&h)
+
+	p := new(planner)
+	cur.Compare(p, old)
+	if !containsUpdateID(p.Delta, "-host-h55-s2") {
+		t.Fatalf("expected removed service delta for dropped service id 2")
+	}
+}
+
 func TestTeamComparison(t *testing.T) {
 	var h hasher
 

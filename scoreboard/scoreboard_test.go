@@ -111,6 +111,13 @@ func TestScoreboardOpenLocalThenEmbedded(t *testing.T) {
 	_ = embedded.Close()
 }
 
+func TestScoreboardOpenMissing(t *testing.T) {
+	s := Scoreboard{dir: http.Dir(t.TempDir())}
+	if _, err := s.Open("definitely-missing-file.bin"); err == nil {
+		t.Fatalf("expected error for missing local and embedded file")
+	}
+}
+
 func TestConfigNewInvalidPublicPath(t *testing.T) {
 	dir := t.TempDir()
 	publicPath := filepath.Join(dir, "public")
@@ -440,6 +447,24 @@ func TestConfigNewDirectoryNotFound(t *testing.T) {
 	}).New()
 	if err == nil {
 		t.Fatalf("expected error for missing directory")
+	}
+}
+
+func TestConfigNewDirectoryNotDir(t *testing.T) {
+	dir := t.TempDir()
+	notDir := filepath.Join(dir, "file.txt")
+	if err := os.WriteFile(notDir, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	_, err := (config{
+		Directory: notDir,
+		Scorebot:  "http://example",
+		Listen:    "127.0.0.1:0",
+		Tick:      1,
+		Timeout:   1,
+	}).New()
+	if err == nil {
+		t.Fatalf("expected fs.ErrInvalid for non-directory path")
 	}
 }
 

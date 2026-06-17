@@ -2,6 +2,7 @@ package game
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -132,6 +133,14 @@ func TestManagerNewAndGameLookup(t *testing.T) {
 	}
 	if got := m2.url.String(); got != "http://scorebot" {
 		t.Fatalf("expected normalized non-abs URL, got %q", got)
+	}
+
+	m3, err := New("http://scorebot", "https://assets.example", time.Second, time.Second)
+	if err != nil {
+		t.Fatalf("manager new with assets: %v", err)
+	}
+	if m3.assets != "https://assets.example" {
+		t.Fatalf("expected explicit assets override, got %q", m3.assets)
 	}
 }
 
@@ -542,6 +551,32 @@ func TestManagerGetRequestBuildError(t *testing.T) {
 	}
 }
 
+func TestManagerGetResponseBodyErrors(t *testing.T) {
+	t.Run("body read error", func(t *testing.T) {
+		m, err := New("http://scorebot", "", time.Second, time.Second)
+		if err != nil {
+			t.Fatalf("manager new: %v", err)
+		}
+		m.client = &http.Client{
+			Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       errorReadCloser{err: errors.New("read fail")},
+				}, nil
+			}),
+		}
+		if _, err := m.get(context.Background(), "api/games"); err == nil {
+			t.Fatalf("expected body read error")
+		}
+	})
+}
+
+func TestManagerNewInvalidURL(t *testing.T) {
+	if _, err := New("http://%", "", time.Second, time.Second); err == nil {
+		t.Fatalf("expected URL parse error")
+	}
+}
+
 func TestManagerStartUpdateDeadline(t *testing.T) {
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(40 * time.Millisecond)
@@ -563,4 +598,16 @@ type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
+}
+
+type errorReadCloser struct {
+	err error
+}
+
+func (e errorReadCloser) Read([]byte) (int, error) {
+	return 0, e.err
+}
+
+func (e errorReadCloser) Close() error {
+	return nil
 }

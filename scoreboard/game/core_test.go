@@ -12,6 +12,10 @@ func TestCleanSlugString(t *testing.T) {
 	if got != "Te-am-Name--" {
 		t.Fatalf("unexpected cleaned slug: %q", got)
 	}
+	got = cleanSlugString("Az09-._")
+	if got != "Az09-._" {
+		t.Fatalf("expected slug-safe characters unchanged, got %q", got)
+	}
 }
 
 func TestHelloUnmarshalJSON(t *testing.T) {

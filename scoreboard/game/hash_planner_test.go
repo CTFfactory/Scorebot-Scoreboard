@@ -128,6 +128,42 @@ func TestPlannerAndCompareHelpers(t *testing.T) {
 	}
 }
 
+func TestPlannerIDConstructionBranches(t *testing.T) {
+	var p planner
+	p.Remove("")
+	if !containsUpdateID(p.Delta, "") {
+		t.Fatalf("expected empty id removal when no prefix is set")
+	}
+
+	p = planner{prefix: "pref"}
+	p.Remove("")
+	if !containsUpdateID(p.Delta, "pref") {
+		t.Fatalf("expected prefix-only remove id when item id is empty")
+	}
+
+	p = planner{}
+	p.Value("id", "v", "cls")
+	if !containsUpdateID(p.Create, "id") {
+		t.Fatalf("expected non-prefixed value id")
+	}
+	p = planner{}
+	p.Value("", "v", "cls")
+	if !containsUpdateID(p.Create, "") {
+		t.Fatalf("expected empty value id when no prefix is set")
+	}
+
+	p = planner{prefix: "root"}
+	p.DeltaValue("k", "v", "c")
+	if !containsUpdateID(p.Delta, "root-k") {
+		t.Fatalf("expected prefixed delta value id")
+	}
+	p = planner{prefix: "root"}
+	p.DeltaValue("", "v", "c")
+	if !containsUpdateID(p.Delta, "root") {
+		t.Fatalf("expected prefix-only delta value id when key is empty")
+	}
+}
+
 func TestPrintStrConversions(t *testing.T) {
 	cases := []struct {
 		in   interface{}

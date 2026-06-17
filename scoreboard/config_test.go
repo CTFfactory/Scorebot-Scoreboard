@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func captureStdout(t *testing.T, fn func()) string {
@@ -118,5 +119,58 @@ func TestCmdlineConfigFile(t *testing.T) {
 	}
 	if got := s.Addr; got != "127.0.0.1:0" {
 		t.Fatalf("expected server address 127.0.0.1:0, got %q", got)
+	}
+}
+
+func TestCmdlineInvalidConfigJSON(t *testing.T) {
+	orig := os.Args
+	defer func() { os.Args = orig }()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "bad.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"scorebot":`), 0o600); err != nil {
+		t.Fatalf("write bad config: %v", err)
+	}
+
+	os.Args = []string{"scoreboard", "-c", cfgPath}
+	if _, err := Cmdline(); err == nil {
+		t.Fatalf("expected JSON parse error for invalid config")
+	}
+}
+
+func TestCmdlineMissingConfigFile(t *testing.T) {
+	orig := os.Args
+	defer func() { os.Args = orig }()
+
+	os.Args = []string{"scoreboard", "-c", filepath.Join(t.TempDir(), "missing.json")}
+	if _, err := Cmdline(); err == nil {
+		t.Fatalf("expected read error for missing config file")
+	}
+}
+
+func TestCmdlineConfigVerifyAfterFileLoad(t *testing.T) {
+	orig := os.Args
+	defer func() { os.Args = orig }()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "scoreboard-zeroes.json")
+	cfg := `{"scorebot":"http://example","tick":0,"timeout":0,"listen":""}`
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	os.Args = []string{"scoreboard", "-c", cfgPath}
+	s, err := Cmdline()
+	if err != nil {
+		t.Fatalf("Cmdline config error: %v", err)
+	}
+	if s == nil {
+		t.Fatalf("expected scoreboard instance")
+	}
+	if s.Addr != "0.0.0.0:8080" {
+		t.Fatalf("expected verify() to restore default listen, got %q", s.Addr)
+	}
+	if s.ReadTimeout != 10*time.Second {
+		t.Fatalf("expected default timeout 10s, got %v", s.ReadTimeout)
 	}
 }
