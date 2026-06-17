@@ -213,43 +213,63 @@ func (s *Scoreboard) listen(err *error, l *sync.Mutex, f context.CancelFunc) {
 }
 
 func (s *Scoreboard) http(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	if !isGet(r.Method) {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	if len(r.URL.Path) <= 1 || r.URL.Path == "/" {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := s.html.ExecuteTemplate(w, "home.html", s.Games); err != nil {
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			slog.Error("Error during home template execution", "error", err.Error())
-		}
+	if isHomePath(r.URL.Path) {
+		s.renderHome(w)
 		return
 	}
-	var (
-		v uint64
-		n = strings.Trim(r.URL.Path, "/")
-		i = strings.IndexRune(n, '/')
-	)
+	v, ok := s.resolveGameID(r.URL.Path)
+	if !ok {
+		s.fs.ServeHTTP(w, r)
+		return
+	}
+	s.renderScoreboard(w, r, v)
+}
+
+func isGet(method string) bool {
+	return method == http.MethodGet
+}
+
+func isHomePath(path string) bool {
+	return len(path) <= 1 || path == "/"
+}
+
+func (s *Scoreboard) renderHome(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.html.ExecuteTemplate(w, "home.html", s.Games); err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		slog.Error("Error during home template execution", "error", err.Error())
+	}
+}
+
+func (s *Scoreboard) resolveGameID(path string) (uint64, bool) {
+	n := strings.Trim(path, "/")
 	if len(n) == 0 {
-		s.fs.ServeHTTP(w, r)
-		return
+		return 0, false
 	}
-	switch {
-	case i < 0:
-		v = s.Game(n)
-	case strings.ToLower(n[:i]) == "game":
-		if x, err := strconv.ParseUint(n[i+1:], 10, 64); err == nil {
-			v = x
-		}
+	i := strings.IndexRune(n, '/')
+	if i < 0 {
+		v := s.Game(n)
+		return v, v > 0
 	}
-	if v == 0 {
-		s.fs.ServeHTTP(w, r)
-		return
+	if strings.ToLower(n[:i]) != "game" {
+		return 0, false
 	}
+	x, err := strconv.ParseUint(n[i+1:], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return x, x > 0
+}
+
+func (s *Scoreboard) renderScoreboard(w http.ResponseWriter, r *http.Request, gameID uint64) {
 	slog.Debug("Received scoreboard request", "remote", r.RemoteAddr)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.html.ExecuteTemplate(w, "scoreboard.html", &display{Game: v, Twitter: false}); err != nil {
+	if err := s.html.ExecuteTemplate(w, "scoreboard.html", &display{Game: gameID, Twitter: false}); err != nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		slog.Error("Error during scoreboard template execution", "remote", r.RemoteAddr, "error", err.Error())
 	}

@@ -120,51 +120,73 @@ func (s *service) Hash(h *hasher) uint64 {
 	}
 	return s.hash
 }
-func (h host) Compare(p *planner, o host) {
-	if o.ID == 0 {
-		p.DeltaValue("host-h"+strconv.FormatUint(h.ID, 10), "", "host")
-	} else {
-		p.Value("host-h"+strconv.FormatUint(h.ID, 10), "", "host")
+
+func (h host) writeHeader(p *planner, existing bool) {
+	id := "host-h" + strconv.FormatUint(h.ID, 10)
+	if existing {
+		p.Value(id, "", "host")
+		return
 	}
+	p.DeltaValue(id, "", "host")
+}
+
+func (h host) writeStateValue(p *planner) {
+	if h.Online {
+		p.Property("", "-offline", "class")
+		return
+	}
+	p.Property("", "+offline", "class")
+}
+
+func (h host) writeStateDelta(p *planner) {
+	if h.Online {
+		p.DeltaProperty("", "-offline", "class")
+		return
+	}
+	p.DeltaProperty("", "+offline", "class")
+}
+
+func (h host) compareServicesByIndex(p *planner, o host) {
+	for i := range h.Services {
+		h.Services[i].Compare(p, o.Services[i])
+	}
+}
+
+func (h host) compareServicesByMap(p *planner, o host) {
+	c := make(compare)
+	for i := range o.Services {
+		c.One(o.Services[i])
+	}
+	for i := range h.Services {
+		c.Two(h.Services[i])
+	}
+	for k, v := range c {
+		switch {
+		case !v.Second():
+			p.Remove("s" + strconv.FormatUint(k, 10))
+		case !v.First():
+			v.B.(service).Compare(p, emptyService)
+		default:
+			v.B.(service).Compare(p, v.A.(service))
+		}
+	}
+}
+
+func (h host) Compare(p *planner, o host) {
+	h.writeHeader(p, o.ID > 0)
 	p.Prefix(p.prefix + "-host-h" + strconv.FormatUint(h.ID, 10))
 	if o.hash == h.hash {
 		p.Value("name", h.Name, "host-name")
-		if h.Online {
-			p.Property("", "-offline", "class")
-		} else {
-			p.Property("", "+offline", "class")
-		}
+		h.writeStateValue(p)
 		if o.total == h.total {
-			for i := range h.Services {
-				h.Services[i].Compare(p, o.Services[i])
-			}
+			h.compareServicesByIndex(p, o)
 		}
 	} else {
 		p.DeltaValue("name", h.Name, "host-name")
-		if h.Online {
-			p.DeltaProperty("", "-offline", "class")
-		} else {
-			p.DeltaProperty("", "+offline", "class")
-		}
+		h.writeStateDelta(p)
 	}
 	if o.ID == 0 || o.total != h.total {
-		c := make(compare)
-		for i := range o.Services {
-			c.One(o.Services[i])
-		}
-		for i := range h.Services {
-			c.Two(h.Services[i])
-		}
-		for k, v := range c {
-			switch {
-			case !v.Second():
-				p.Remove("s" + strconv.FormatUint(k, 10))
-			case !v.First():
-				v.B.(service).Compare(p, emptyService)
-			default:
-				v.B.(service).Compare(p, v.A.(service))
-			}
-		}
+		h.compareServicesByMap(p, o)
 	}
 	p.rollbackPrefix()
 }

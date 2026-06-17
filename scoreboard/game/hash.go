@@ -69,87 +69,126 @@ func updateFnv(h uint64, b []byte) uint64 {
 	}
 	return h
 }
-func (h *hasher) Hash(v interface{}) error {
-	b := *bufs.Get().(*[]byte)
-	_ = b[7]
+
+func writeUint16Bytes(b []byte, n uint16) {
+	b[0], b[1] = byte(n>>8), byte(n)
+}
+
+func writeUint32Bytes(b []byte, n uint32) {
+	b[0], b[1] = byte(n>>24), byte(n>>16)
+	b[2], b[3] = byte(n>>8), byte(n)
+}
+
+func writeUint64Bytes(b []byte, n uint64) {
+	b[0], b[1] = byte(n>>56), byte(n>>48)
+	b[2], b[3] = byte(n>>40), byte(n>>32)
+	b[4], b[5] = byte(n>>24), byte(n>>16)
+	b[6], b[7] = byte(n>>8), byte(n)
+}
+
+func (h *hasher) hashBool(v interface{}, b []byte) bool {
+	i, ok := v.(bool)
+	if !ok {
+		return false
+	}
+	if i {
+		b[0] = 1
+	} else {
+		b[0] = 0
+	}
+	h.Write(b[:1])
+	return true
+}
+
+func (h *hasher) hashStringLike(v interface{}) bool {
 	switch i := v.(type) {
-	case bool:
-		if i {
-			b[0] = 1
-		} else {
-			b[0] = 0
-		}
-		h.Write(b[:1])
 	case []byte:
 		h.Write(i)
 	case string:
 		h.Write([]byte(i))
+	case stringer:
+		h.Write([]byte(i.String()))
+	default:
+		return false
+	}
+	return true
+}
+
+func (h *hasher) hashFloat(v interface{}, b []byte) bool {
+	switch i := v.(type) {
 	case float32:
-		n := *(*uint32)(unsafe.Pointer(&i))
-		b[0], b[1] = byte(n>>24), byte(n>>16)
-		b[2], b[3] = byte(n>>8), byte(n)
+		writeUint32Bytes(b, *(*uint32)(unsafe.Pointer(&i)))
 		h.Write(b[:4])
 	case float64:
-		n := *(*uint64)(unsafe.Pointer(&i))
-		b[0], b[1] = byte(n>>56), byte(n>>48)
-		b[2], b[3] = byte(n>>40), byte(n>>32)
-		b[4], b[5] = byte(n>>24), byte(n>>16)
-		b[6], b[7] = byte(n>>8), byte(n)
+		writeUint64Bytes(b, *(*uint64)(unsafe.Pointer(&i)))
 		h.Write(b)
+	default:
+		return false
+	}
+	return true
+}
+
+func (h *hasher) hashSmallInt(v interface{}, b []byte) bool {
+	switch i := v.(type) {
 	case int8:
-		if i < 0 {
-			b[0] = byte(uint16(int16(i) + 256))
-		} else {
-			b[0] = byte(i)
-		}
+		b[0] = byte(i)
 		h.Write(b[:1])
 	case uint8:
 		b[0] = i
 		h.Write(b[:1])
 	case int16:
-		b[0], b[1] = byte(i>>8), byte(i)
+		writeUint16Bytes(b, uint16(i))
 		h.Write(b[:2])
 	case uint16:
-		b[0], b[1] = byte(i>>8), byte(i)
+		writeUint16Bytes(b, i)
 		h.Write(b[:2])
 	case int32:
-		b[0], b[1] = byte(i>>24), byte(i>>16)
-		b[2], b[3] = byte(i>>8), byte(i)
+		writeUint32Bytes(b, uint32(i))
 		h.Write(b[:4])
 	case uint32:
-		b[0], b[1] = byte(i>>24), byte(i>>16)
-		b[2], b[3] = byte(i>>8), byte(i)
+		writeUint32Bytes(b, i)
 		h.Write(b[:4])
-	case int64:
-		b[0], b[1] = byte(i>>56), byte(i>>48)
-		b[2], b[3] = byte(i>>40), byte(i>>32)
-		b[4], b[5] = byte(i>>24), byte(i>>16)
-		b[6], b[7] = byte(i>>8), byte(i)
-		h.Write(b)
-	case uint64:
-		b[0], b[1] = byte(i>>56), byte(i>>48)
-		b[2], b[3] = byte(i>>40), byte(i>>32)
-		b[4], b[5] = byte(i>>24), byte(i>>16)
-		b[6], b[7] = byte(i>>8), byte(i)
-		h.Write(b)
-	case int:
-		b[0], b[1] = byte(i>>56), byte(i>>48)
-		b[2], b[3] = byte(i>>40), byte(i>>32)
-		b[4], b[5] = byte(i>>24), byte(i>>16)
-		b[6], b[7] = byte(i>>8), byte(i)
-		h.Write(b)
-	case uint:
-		b[0], b[1] = byte(i>>56), byte(i>>48)
-		b[2], b[3] = byte(i>>40), byte(i>>32)
-		b[4], b[5] = byte(i>>24), byte(i>>16)
-		b[6], b[7] = byte(i>>8), byte(i)
-		h.Write(b)
-	case stringer:
-		h.Write([]byte(v.(stringer).String()))
 	default:
-		bufs.Put(&b)
-		return errors.New("cannot hash the requested type")
+		return false
 	}
-	bufs.Put(&b)
-	return nil
+	return true
+}
+
+func (h *hasher) hashLargeInt(v interface{}, b []byte) bool {
+	switch i := v.(type) {
+	case int64:
+		writeUint64Bytes(b, uint64(i))
+	case uint64:
+		writeUint64Bytes(b, i)
+	case int:
+		writeUint64Bytes(b, uint64(i))
+	case uint:
+		writeUint64Bytes(b, uint64(i))
+	default:
+		return false
+	}
+	h.Write(b)
+	return true
+}
+
+func (h *hasher) Hash(v interface{}) error {
+	b := *bufs.Get().(*[]byte)
+	defer bufs.Put(&b)
+	_ = b[7]
+	if h.hashBool(v, b) {
+		return nil
+	}
+	if h.hashStringLike(v) {
+		return nil
+	}
+	if h.hashFloat(v, b) {
+		return nil
+	}
+	if h.hashSmallInt(v, b) {
+		return nil
+	}
+	if h.hashLargeInt(v, b) {
+		return nil
+	}
+	return errors.New("cannot hash the requested type")
 }

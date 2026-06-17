@@ -95,104 +95,137 @@ func (b *beacon) Hash(h *hasher) uint64 {
 	}
 	return b.hash
 }
-func (t team) Compare(p *planner, o team) {
-	if o.ID == 0 {
-		p.DeltaValue("team-t"+strconv.FormatUint(t.ID, 10), "", "team")
-	} else {
-		p.Value("team-t"+strconv.FormatUint(t.ID, 10), "", "team")
+
+func (t team) writeHeader(p *planner, existing bool) {
+	id := "team-t" + strconv.FormatUint(t.ID, 10)
+	if existing {
+		p.Value(id, "", "team")
+		return
 	}
+	p.DeltaValue(id, "", "team")
+}
+
+func (t team) writeIdentityValues(p *planner) {
+	p.Value("beacon", "", "team-beacon")
+	p.Value("beacon-con", "", "team-beacon-container")
+	p.Value("logo", "", "team-logo")
+	p.Value("name", "", "team-name")
+	p.Value("host", "", "team-host")
+	p.Value("score", "", "team-score")
+	p.Value("name-name", t.Name, "team-name-div")
+	p.Property("logo", t.Color, "background-color")
+	p.Property("logo", "url('"+t.Logo+"')", "background-image")
+	p.Property("", t.Color, "border-color")
+	if t.Offense {
+		p.Property("", "+offense", "class")
+	} else {
+		p.Property("", "-offense", "class")
+	}
+	if t.Minimal {
+		p.Property("", "+mini", "class")
+	} else {
+		p.Property("", "-mini", "class")
+	}
+}
+
+func (t team) writeIdentityDelta(p *planner) {
+	p.DeltaValue("beacon", "", "team-beacon")
+	p.DeltaValue("beacon-con", "", "team-beacon-container")
+	p.DeltaValue("logo", "", "team-logo")
+	p.DeltaValue("name", "", "team-name")
+	p.DeltaValue("host", "", "team-host")
+	p.DeltaValue("score", "", "team-score")
+	p.DeltaValue("name-name", t.Name, "team-name-div")
+	p.DeltaProperty("logo", t.Color, "background-color")
+	p.DeltaProperty("logo", "url('"+t.Logo+"')", "background-image")
+	p.DeltaProperty("", t.Color, "border-color")
+	if t.Offense {
+		p.DeltaProperty("", "+offense", "class")
+	} else {
+		p.DeltaProperty("", "-offense", "class")
+	}
+	if t.Minimal {
+		p.DeltaProperty("", "+mini", "class")
+	} else {
+		p.DeltaProperty("", "-mini", "class")
+	}
+}
+
+func (t team) compareStaticScores(p *planner, o team) {
+	t.Score.Compare(p, o.Score)
+	t.Flags.Compare(p, o.Flags)
+	t.Tickets.Compare(p, o.Tickets)
+}
+
+func (t team) compareByIndex(p *planner, o team) {
+	for i := range t.Hosts {
+		t.Hosts[i].Compare(p, o.Hosts[i])
+	}
+	for i := range t.Beacons {
+		t.Beacons[i].Compare(p, o.Beacons[i])
+	}
+}
+
+func (t team) compareHostsByMap(p *planner, o team) {
+	y := make(compare)
+	for i := range o.Hosts {
+		y.One(o.Hosts[i])
+	}
+	for i := range t.Hosts {
+		y.Two(t.Hosts[i])
+	}
+	for k, v := range y {
+		switch {
+		case !v.Second():
+			p.Remove("host-h" + strconv.FormatUint(k, 10))
+		case !v.First():
+			v.B.(host).Compare(p, emptyHost)
+		default:
+			v.B.(host).Compare(p, v.A.(host))
+		}
+	}
+}
+
+func (t team) compareBeaconsByMap(p *planner, o team) {
+	u := make(compare)
+	for i := range o.Beacons {
+		u.One(o.Beacons[i])
+	}
+	for i := range t.Beacons {
+		u.Two(t.Beacons[i])
+	}
+	for k, v := range u {
+		switch {
+		case !v.Second():
+			p.Remove("beacon-con-b" + strconv.FormatUint(k, 10))
+		case !v.First():
+			v.B.(beacon).Compare(p, emptyBeacon)
+		default:
+			v.B.(beacon).Compare(p, v.A.(beacon))
+		}
+	}
+}
+
+func (t team) compareDynamicChildren(p *planner, o team) {
+	t.compareStaticScores(p, o)
+	t.compareHostsByMap(p, o)
+	t.compareBeaconsByMap(p, o)
+}
+
+func (t team) Compare(p *planner, o team) {
+	t.writeHeader(p, o.ID > 0)
 	p.Prefix(p.prefix + "-team-t" + strconv.FormatUint(t.ID, 10))
 	if o.hash == t.hash {
-		p.Value("beacon", "", "team-beacon")
-		p.Value("beacon-con", "", "team-beacon-container")
-		p.Value("logo", "", "team-logo")
-		p.Value("name", "", "team-name")
-		p.Value("host", "", "team-host")
-		p.Value("score", "", "team-score")
-		p.Value("name-name", t.Name, "team-name-div")
-		p.Property("logo", t.Color, "background-color")
-		p.Property("logo", "url('"+t.Logo+"')", "background-image")
-		p.Property("", t.Color, "border-color")
-		if t.Offense {
-			p.Property("", "+offense", "class")
-		} else {
-			p.Property("", "-offense", "class")
-		}
-		if t.Minimal {
-			p.Property("", "+mini", "class")
-		} else {
-			p.Property("", "-mini", "class")
-		}
-		t.Score.Compare(p, o.Score)
-		t.Flags.Compare(p, o.Flags)
-		t.Tickets.Compare(p, o.Tickets)
+		t.writeIdentityValues(p)
+		t.compareStaticScores(p, o)
 		if o.total == t.total {
-			for i := range t.Hosts {
-				t.Hosts[i].Compare(p, o.Hosts[i])
-			}
-			for i := range t.Beacons {
-				t.Beacons[i].Compare(p, o.Beacons[i])
-			}
+			t.compareByIndex(p, o)
 		}
 	} else {
-		p.DeltaValue("beacon", "", "team-beacon")
-		p.DeltaValue("beacon-con", "", "team-beacon-container")
-		p.DeltaValue("logo", "", "team-logo")
-		p.DeltaValue("name", "", "team-name")
-		p.DeltaValue("host", "", "team-host")
-		p.DeltaValue("score", "", "team-score")
-		p.DeltaValue("name-name", t.Name, "team-name-div")
-		p.DeltaProperty("logo", t.Color, "background-color")
-		p.DeltaProperty("logo", "url('"+t.Logo+"')", "background-image")
-		p.DeltaProperty("", t.Color, "border-color")
-		if t.Offense {
-			p.DeltaProperty("", "+offense", "class")
-		} else {
-			p.DeltaProperty("", "-offense", "class")
-		}
-		if t.Minimal {
-			p.DeltaProperty("", "+mini", "class")
-		} else {
-			p.DeltaProperty("", "-mini", "class")
-		}
+		t.writeIdentityDelta(p)
 	}
 	if o.ID == 0 || o.total != t.total {
-		y, u := make(compare), make(compare)
-		t.Score.Compare(p, o.Score)
-		t.Flags.Compare(p, o.Flags)
-		t.Tickets.Compare(p, o.Tickets)
-		for i := range o.Hosts {
-			y.One(o.Hosts[i])
-		}
-		for i := range o.Beacons {
-			u.One(o.Beacons[i])
-		}
-		for i := range t.Hosts {
-			y.Two(t.Hosts[i])
-		}
-		for i := range t.Beacons {
-			u.Two(t.Beacons[i])
-		}
-		for k, v := range y {
-			switch {
-			case !v.Second():
-				p.Remove("host-h" + strconv.FormatUint(k, 10))
-			case !v.First():
-				v.B.(host).Compare(p, emptyHost)
-			default:
-				v.B.(host).Compare(p, v.A.(host))
-			}
-		}
-		for k, v := range u {
-			switch {
-			case !v.Second():
-				p.Remove("beacon-con-b" + strconv.FormatUint(k, 10))
-			case !v.First():
-				v.B.(beacon).Compare(p, emptyBeacon)
-			default:
-				v.B.(beacon).Compare(p, v.A.(beacon))
-			}
-		}
+		t.compareDynamicChildren(p, o)
 	}
 	p.rollbackPrefix()
 }

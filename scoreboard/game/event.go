@@ -108,13 +108,14 @@ func (g *game) hashTweets(h *hasher) uint64 {
 	}
 	return g.tweets
 }
-func (g game) compareTweets(p *planner, o *game) {
-	if o != nil && o.tweets == g.tweets {
-		for i := range g.Tweets {
-			compareTweet(p, g.Tweets[i], o.Tweets[i])
-		}
-		return
+
+func (g game) compareTweetsByHash(p *planner, o *game) {
+	for i := range g.Tweets {
+		compareTweet(p, g.Tweets[i], o.Tweets[i])
 	}
+}
+
+func (g game) compareTweetsByMap(p *planner, o *game) {
 	c := make(compare)
 	if o != nil {
 		for i := range o.Tweets {
@@ -135,16 +136,22 @@ func (g game) compareTweets(p *planner, o *game) {
 		}
 	}
 }
-func (e *events) Compare(p *planner, o events) {
-	if o.hash == 0 {
-		e.Window = o.Window
-	}
-	if o.hash == e.hash {
-		for i := range e.Current {
-			p.Event(e.Current[i].ID, e.Current[i].Type, e.Current[i].Data)
-		}
+
+func (g game) compareTweets(p *planner, o *game) {
+	if o != nil && o.tweets == g.tweets {
+		g.compareTweetsByHash(p, o)
 		return
 	}
+	g.compareTweetsByMap(p, o)
+}
+
+func (e *events) compareCurrentByHash(p *planner) {
+	for i := range e.Current {
+		p.Event(e.Current[i].ID, e.Current[i].Type, e.Current[i].Data)
+	}
+}
+
+func (e *events) compareCurrentByMap(p *planner, o events) {
 	c := make(compare)
 	for i := range o.Current {
 		c.One(o.Current[i])
@@ -166,6 +173,17 @@ func (e *events) Compare(p *planner, o events) {
 		}
 		p.Event(k, v.B.(event).Type, v.B.(event).Data)
 	}
+}
+
+func (e *events) Compare(p *planner, o events) {
+	if o.hash == 0 {
+		e.Window = o.Window
+	}
+	if o.hash == e.hash {
+		e.compareCurrentByHash(p)
+		return
+	}
+	e.compareCurrentByMap(p, o)
 }
 func (e *events) setWindowEvent(p *planner, w event) {
 	if w.Type <= 0 || e.Window.ID == w.ID {
