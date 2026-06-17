@@ -3,10 +3,16 @@ package main
 import (
 	"bytes"
 	"errors"
+	"flag"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/CTFfactory/Scorebot-Scoreboard/scoreboard"
+	"github.com/CTFfactory/Scorebot-Scoreboard/scoreboard/game"
 )
 
 func TestHelperProcess(t *testing.T) {
@@ -92,5 +98,66 @@ func TestMainStartupErrorPath(t *testing.T) {
 	}
 	if !strings.Contains(errOut, "Error during startup:") {
 		t.Fatalf("expected startup error output, got %q", errOut)
+	}
+}
+
+func TestRunRuntimeErrorPath(t *testing.T) {
+	oldCmdline, oldRun, oldStderr := cmdlineFunc, runFunc, stderrFunc
+	t.Cleanup(func() {
+		cmdlineFunc = oldCmdline
+		runFunc = oldRun
+		stderrFunc = oldStderr
+	})
+
+	cmdlineFunc = func() (*scoreboard.Scoreboard, error) { return &scoreboard.Scoreboard{}, nil }
+	runFunc = func(*scoreboard.Scoreboard) error { return errors.New("runtime boom") }
+
+	var out strings.Builder
+	stderrFunc = func(msg string) { _, _ = out.WriteString(msg) }
+
+	if code := run(); code != 1 {
+		t.Fatalf("expected exit code 1 for runtime error path, got %d", code)
+	}
+	if got := out.String(); !strings.Contains(got, "Error during runtime: runtime boom!") {
+		t.Fatalf("expected runtime error output, got %q", got)
+	}
+}
+
+func TestRunSuccessAndHelpPaths(t *testing.T) {
+	oldCmdline, oldRun, oldStderr := cmdlineFunc, runFunc, stderrFunc
+	t.Cleanup(func() {
+		cmdlineFunc = oldCmdline
+		runFunc = oldRun
+		stderrFunc = oldStderr
+	})
+
+	cmdlineFunc = func() (*scoreboard.Scoreboard, error) { return nil, flag.ErrHelp }
+	if code := run(); code != 2 {
+		t.Fatalf("expected exit code 2 for help path, got %d", code)
+	}
+
+	cmdlineFunc = func() (*scoreboard.Scoreboard, error) { return &scoreboard.Scoreboard{}, nil }
+	runFunc = func(*scoreboard.Scoreboard) error { return nil }
+	stderrFunc = func(string) {}
+	if code := run(); code != 0 {
+		t.Fatalf("expected exit code 0 for successful run path, got %d", code)
+	}
+}
+
+func TestDefaultRunFuncPath(t *testing.T) {
+	m, err := game.New("http://127.0.0.1:1", "", time.Millisecond, 20*time.Millisecond)
+	if err != nil {
+		t.Fatalf("manager new: %v", err)
+	}
+	s := &scoreboard.Scoreboard{
+		Manager: m,
+		Server: &http.Server{
+			Addr:        "invalid-listen-address",
+			Handler:     http.NewServeMux(),
+			ReadTimeout: 20 * time.Millisecond,
+		},
+	}
+	if err := runFunc(s); err != nil {
+		t.Fatalf("expected runFunc default path to return nil, got %v", err)
 	}
 }

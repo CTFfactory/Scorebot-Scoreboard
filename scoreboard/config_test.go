@@ -1,9 +1,12 @@
 package scoreboard
 
 import (
+	"bytes"
+	"errors"
 	"flag"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -30,6 +33,44 @@ func captureStdout(t *testing.T, fn func()) string {
 	return string(out)
 }
 
+func TestConfigHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_CONFIG_HELPER") != "1" {
+		return
+	}
+	switch os.Getenv("CONFIG_HELPER_MODE") {
+	case "usage":
+		args, _, _, _ := newFlags(&config{})
+		args.Usage()
+	case "cmdline-help":
+		os.Args = []string{"scoreboard", "-h"}
+		if _, err := Cmdline(); err == flag.ErrHelp {
+			os.Exit(2)
+		} else if err != nil {
+			os.Exit(1)
+		}
+	}
+	os.Exit(0)
+}
+
+func runConfigHelper(t *testing.T, mode string) (int, string, string) {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=TestConfigHelperProcess")
+	cmd.Env = append(os.Environ(), "GO_WANT_CONFIG_HELPER=1", "CONFIG_HELPER_MODE="+mode)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err == nil {
+		return 0, stdout.String(), stderr.String()
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode(), stdout.String(), stderr.String()
+	}
+	t.Fatalf("run config helper failed: %v", err)
+	return 0, "", ""
+}
+
 func TestConfigVerifyDefaults(t *testing.T) {
 	c := config{}
 	if err := c.verify(); err != nil {
@@ -43,6 +84,26 @@ func TestConfigVerifyDefaults(t *testing.T) {
 	}
 	if c.Listen != "0.0.0.0:8080" {
 		t.Fatalf("expected default listen, got %q", c.Listen)
+	}
+}
+
+func TestNewFlagsUsagePath(t *testing.T) {
+	code, out, _ := runConfigHelper(t, "usage")
+	if code != 0 {
+		t.Fatalf("expected usage helper to exit with code 0, got %d", code)
+	}
+	if !strings.Contains(out, "Usage of scoreboard:") {
+		t.Fatalf("expected usage output, got %q", out)
+	}
+}
+
+func TestCmdlineHelpFlagPath(t *testing.T) {
+	code, out, errOut := runConfigHelper(t, "cmdline-help")
+	if code != 0 && code != 2 {
+		t.Fatalf("expected help helper exit code 0 or 2, got %d (%s)", code, errOut)
+	}
+	if !strings.Contains(out, "Usage of scoreboard:") {
+		t.Fatalf("expected help usage output, got %q", out)
 	}
 }
 
@@ -91,6 +152,25 @@ func TestCmdlineMissingRequiredArgs(t *testing.T) {
 		}
 		if s != nil {
 			t.Fatalf("expected nil scoreboard")
+		}
+	})
+	if !strings.Contains(out, "Usage of scoreboard:") {
+		t.Fatalf("expected usage output, got %q", out)
+	}
+}
+
+func TestCmdlineInvalidFlagReturnsHelp(t *testing.T) {
+	orig := os.Args
+	defer func() { os.Args = orig }()
+
+	os.Args = []string{"scoreboard", "-not-a-real-flag"}
+	out := captureStdout(t, func() {
+		s, err := Cmdline()
+		if err != flag.ErrHelp {
+			t.Fatalf("expected flag.ErrHelp for invalid flag, got %v", err)
+		}
+		if s != nil {
+			t.Fatalf("expected nil scoreboard for invalid flag")
 		}
 	})
 	if !strings.Contains(out, "Usage of scoreboard:") {

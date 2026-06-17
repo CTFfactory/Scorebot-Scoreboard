@@ -34,8 +34,7 @@ jobs:
       - name: Binary integration test
         run: bash ./test-binary.sh
 
-      - name: Coverage gate (99%, non-blocking until suite is expanded)
-        continue-on-error: true
+      - name: Coverage gate (99%)
         run: |
           go test -coverprofile=coverage.out ./...
           go tool cover -func=coverage.out | awk '/^total:/ {gsub("%", "", $3); if ($3 + 0 < 99) {printf("coverage %.1f%% is below threshold 99%%\n", $3 + 0); exit 1}}'

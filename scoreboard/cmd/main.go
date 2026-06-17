@@ -23,23 +23,31 @@ import (
 	"github.com/CTFfactory/Scorebot-Scoreboard/scoreboard"
 )
 
-func main() {
-	s, err := scoreboard.Cmdline()
+var (
+	cmdlineFunc = scoreboard.Cmdline
+	runFunc     = func(s *scoreboard.Scoreboard) error { return s.Run() }
+	stderrFunc  = func(msg string) { _, _ = os.Stderr.WriteString(msg) }
+)
+
+func run() int {
+	s, err := cmdlineFunc()
 	if err == flag.ErrHelp {
-		os.Exit(2)
+		return 2
 	}
-
 	if err != nil {
-		os.Stderr.WriteString("Error during startup: " + err.Error() + "!\n")
-		os.Exit(1)
+		stderrFunc("Error during startup: " + err.Error() + "!\n")
+		return 1
 	}
-
 	if s == nil {
-		os.Exit(0)
+		return 0
 	}
+	if err := runFunc(s); err != nil {
+		stderrFunc("Error during runtime: " + err.Error() + "!\n")
+		return 1
+	}
+	return 0
+}
 
-	if err := s.Run(); err != nil {
-		os.Stderr.WriteString("Error during runtime: " + err.Error() + "!\n")
-		os.Exit(1)
-	}
+func main() {
+	os.Exit(run())
 }

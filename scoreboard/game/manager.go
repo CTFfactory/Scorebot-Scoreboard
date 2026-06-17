@@ -395,9 +395,6 @@ func (s *subscription) writeUpdates(x context.Context, u []update) {
 		if contextDone(x) {
 			return
 		}
-		if i > len(s.clients) {
-			return
-		}
 		if !s.clients[i].ok {
 			s.clients[i].Close()
 			continue

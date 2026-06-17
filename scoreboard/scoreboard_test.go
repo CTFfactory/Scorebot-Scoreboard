@@ -484,4 +484,22 @@ func TestScoreboardRunWhenListenFails(t *testing.T) {
 	if err := s.Run(); err != nil {
 		t.Fatalf("expected nil shutdown error on listen failure path, got %v", err)
 	}
+	if s.BaseContext == nil {
+		t.Fatalf("expected run to set base context function")
+	}
+	if ctx := s.BaseContext(nil); ctx == nil {
+		t.Fatalf("expected base context function to return a context")
+	}
+}
+
+func TestConfigNewManagerCreationError(t *testing.T) {
+	_, err := (config{
+		Scorebot: "http://%",
+		Listen:   "127.0.0.1:0",
+		Tick:     1,
+		Timeout:  1,
+	}).New()
+	if err == nil {
+		t.Fatalf("expected manager creation error for invalid scorebot URL")
+	}
 }

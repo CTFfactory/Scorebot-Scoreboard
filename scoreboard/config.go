@@ -62,14 +62,13 @@ type config struct {
 
 func newFlags(c *config) (*flag.FlagSet, *bool, *bool, *string) {
 	var (
-		args = flag.NewFlagSet("Scorebot Scoreboard", flag.ExitOnError)
+		args = flag.NewFlagSet("Scorebot Scoreboard", flag.ContinueOnError)
 		d    bool
 		V    bool
 		s    string
 	)
 	args.Usage = func() {
 		os.Stdout.WriteString(usage)
-		os.Exit(2)
 	}
 	args.StringVar(&s, "c", "", "")
 	args.BoolVar(&d, "d", false, "")

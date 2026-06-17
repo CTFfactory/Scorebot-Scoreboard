@@ -237,3 +237,35 @@ func TestHostWriteStateDeltaBranches(t *testing.T) {
 		t.Fatalf("expected offline host to emit +offline delta")
 	}
 }
+
+func TestGameTeamCompareMapNilAndNonNilOld(t *testing.T) {
+	current := &game{
+		Teams: []team{{ID: 1}, {ID: 2}},
+	}
+	old := &game{
+		Teams: []team{{ID: 1}, {ID: 3}},
+	}
+
+	m := current.teamCompareMap(old)
+	if len(m) != 3 {
+		t.Fatalf("expected map to include merged old/new team ids, got %d", len(m))
+	}
+	if _, ok := m[3]; !ok {
+		t.Fatalf("expected removed team id from old snapshot to be present")
+	}
+
+	m = current.teamCompareMap(nil)
+	if len(m) != 2 {
+		t.Fatalf("expected map to contain current teams when old is nil, got %d", len(m))
+	}
+	if _, ok := m[1]; !ok {
+		t.Fatalf("expected current team id to be present when old is nil")
+	}
+}
+
+func TestGameUnmarshalJSONInvalidPayload(t *testing.T) {
+	var g game
+	if err := g.UnmarshalJSON([]byte("{")); err == nil {
+		t.Fatalf("expected unmarshal error for invalid JSON payload")
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -578,6 +579,36 @@ func TestManagerUpdateAndLifecycle(t *testing.T) {
 	}
 }
 
+func TestManagerUpdateHelpersContextCancellation(t *testing.T) {
+	m := &Manager{
+		subs: map[uint64]*subscription{
+			1: {
+				ID:      1,
+				new:     make(chan *websocket.Conn, 1),
+				clients: make([]*stream, 0),
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	stale, ok := m.updateSubscriptionsLocked(ctx)
+	if ok {
+		t.Fatalf("expected updateSubscriptionsLocked to stop on cancelled context")
+	}
+	if len(stale) != 0 {
+		t.Fatalf("expected no stale ids when context exits before update work")
+	}
+
+	if ok := m.removeStaleSubscriptionsLocked(ctx, []uint64{1}); ok {
+		t.Fatalf("expected removeStaleSubscriptionsLocked to stop on cancelled context")
+	}
+	if len(m.subs) != 1 {
+		t.Fatalf("expected subscriptions to remain untouched on cancelled context")
+	}
+}
+
 func TestManagerClose(t *testing.T) {
 	m := &Manager{
 		subs: map[uint64]*subscription{
@@ -743,6 +774,238 @@ func TestManagerGetResponseBodyErrors(t *testing.T) {
 func TestManagerNewInvalidURL(t *testing.T) {
 	if _, err := New("http://%", "", time.Second, time.Second); err == nil {
 		t.Fatalf("expected URL parse error")
+	}
+}
+
+func TestManagerEnsureSubscriptionReuse(t *testing.T) {
+	m := &Manager{
+		subs:   make(map[uint64]*subscription),
+		assets: "http://assets",
+	}
+	g := game{
+		Meta:  meta{ID: 7, Name: "Game Seven"},
+		Teams: []team{{ID: 1, Name: "Blue"}},
+	}
+	first := m.ensureSubscription(g)
+	second := m.ensureSubscription(g)
+	if first != second {
+		t.Fatalf("expected ensureSubscription to reuse existing entry")
+	}
+}
+
+func TestManagerNewRecoverFromPanic(t *testing.T) {
+	m, err := New("http://scorebot", "", time.Second, time.Second)
+	if err != nil {
+		t.Fatalf("manager new: %v", err)
+	}
+	m.New(nil)
+}
+
+func TestSubscriptionFetchAndUpdateErrorPaths(t *testing.T) {
+	m, err := New("http://scorebot", "", time.Second, time.Second)
+	if err != nil {
+		t.Fatalf("manager new: %v", err)
+	}
+	m.client = &http.Client{
+		Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New("transport boom")
+		}),
+	}
+	s := &subscription{
+		ID:      1,
+		new:     make(chan *websocket.Conn, 1),
+		clients: make([]*stream, 0),
+	}
+	if _, ok := s.fetchGame(context.Background(), m); ok {
+		t.Fatalf("expected fetchGame failure when upstream request fails")
+	}
+	s.update(context.Background(), m)
+}
+
+func TestSubscriptionUpdateRecoverFromPanic(t *testing.T) {
+	s := &subscription{
+		ID:      1,
+		new:     make(chan *websocket.Conn, 1),
+		clients: make([]*stream, 0),
+	}
+	s.update(context.Background(), nil)
+}
+
+func TestSubscriptionUpdateContextAfterFetch(t *testing.T) {
+	m, err := New("http://scorebot", "", time.Second, time.Second)
+	if err != nil {
+		t.Fatalf("manager new: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.client = &http.Client{
+		Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			cancel()
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body: io.NopCloser(strings.NewReader(
+					`{"name":"Game One","mode":0,"teams":[{"id":1,"name":"Blue"}]}`,
+				)),
+			}, nil
+		}),
+	}
+	m.Games = []meta{{ID: 1, Status: running}}
+	s := &subscription{
+		ID:      1,
+		new:     make(chan *websocket.Conn, 1),
+		clients: make([]*stream, 0),
+	}
+	s.update(ctx, m)
+}
+
+func TestSubscriptionWriteUpdatesContextDone(t *testing.T) {
+	server, _, cleanup := websocketPair(t)
+	defer cleanup()
+	s := &subscription{
+		clients: []*stream{{Conn: server, ok: true}},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s.writeUpdates(ctx, []update{{ID: "x", Value: "y"}})
+	if len(s.clients) != 1 {
+		t.Fatalf("expected early context return to keep clients unchanged")
+	}
+}
+
+func TestManagerUpdateCancellationBranches(t *testing.T) {
+	t.Run("context done after active update map refresh", func(t *testing.T) {
+		m, err := New("http://scorebot", "", time.Second, time.Second)
+		if err != nil {
+			t.Fatalf("manager new: %v", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		m.client = &http.Client{
+			Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Path == "/api/games" {
+					cancel()
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body: io.NopCloser(strings.NewReader(
+							`[{"id":1,"name":"Game One","mode":0,"status":1}]`,
+						)),
+					}, nil
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body: io.NopCloser(strings.NewReader(
+						`{"name":"Game One","mode":0,"teams":[{"id":1,"name":"Blue"}]}`,
+					)),
+				}, nil
+			}),
+		}
+		m.update(ctx)
+	})
+
+	t.Run("subscription loop returns not ok after cancellation", func(t *testing.T) {
+		m, err := New("http://scorebot", "", time.Second, time.Second)
+		if err != nil {
+			t.Fatalf("manager new: %v", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		var once sync.Once
+		m.client = &http.Client{
+			Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+				switch r.URL.Path {
+				case "/api/games":
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body: io.NopCloser(strings.NewReader(
+							`[{"id":1,"name":"Game One","mode":0,"status":1},{"id":2,"name":"Game Two","mode":0,"status":1}]`,
+						)),
+					}, nil
+				case "/api/games/1/scoreboard", "/api/games/2/scoreboard":
+					once.Do(cancel)
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body: io.NopCloser(strings.NewReader(
+							`{"name":"Game One","mode":0,"teams":[{"id":1,"name":"Blue"}]}`,
+						)),
+					}, nil
+				default:
+					return &http.Response{
+						StatusCode: http.StatusNotFound,
+						Header:     make(http.Header),
+						Body:       io.NopCloser(strings.NewReader("not found")),
+					}, nil
+				}
+			}),
+		}
+		m.subs[1] = &subscription{ID: 1, new: make(chan *websocket.Conn, 1), clients: make([]*stream, 0)}
+		m.subs[2] = &subscription{ID: 2, new: make(chan *websocket.Conn, 1), clients: make([]*stream, 0)}
+		m.update(ctx)
+	})
+
+	t.Run("stale removal exits when context cancels", func(t *testing.T) {
+		m, err := New("http://scorebot", "", time.Second, time.Second)
+		if err != nil {
+			t.Fatalf("manager new: %v", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		fetched := make(chan struct{}, 1)
+		m.client = &http.Client{
+			Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Path == "/api/games" {
+					select {
+					case fetched <- struct{}{}:
+					default:
+					}
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body:       io.NopCloser(strings.NewReader(`[]`)),
+					}, nil
+				}
+				return &http.Response{
+					StatusCode: http.StatusNotFound,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader("not found")),
+				}, nil
+			}),
+		}
+		for i := 0; i < 50000; i++ {
+			id := uint64(i + 1)
+			s := &subscription{ID: id, new: make(chan *websocket.Conn, 1), clients: make([]*stream, 0)}
+			atomic.StoreUint32(&s.stale, 1)
+			m.subs[id] = s
+		}
+		go func() {
+			<-fetched
+			time.Sleep(time.Millisecond)
+			cancel()
+		}()
+		m.update(ctx)
+		if len(m.subs) == 0 {
+			t.Fatalf("expected cancellation during stale removal to leave some subscriptions intact")
+		}
+	})
+}
+
+func TestManagerStartUpdateRecoverFromPanic(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/games" {
+			_, _ = io.WriteString(w, `[{"id":1,"name":"Game One","mode":0,"status":1}]`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer api.Close()
+	m, err := New(api.URL, "", time.Millisecond, 20*time.Millisecond)
+	if err != nil {
+		t.Fatalf("manager new: %v", err)
+	}
+	m.active = nil
+	m.startUpdate(context.Background())
+	if atomic.LoadUint32(&m.running) != 0 {
+		t.Fatalf("expected manager running flag reset after panic recovery")
 	}
 }
 
