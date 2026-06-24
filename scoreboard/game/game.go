@@ -130,97 +130,124 @@ func (g game) Less(i, j int) bool {
 }
 func (m *meta) Hash(h *hasher) uint64 {
 	if m.hash == 0 {
-		h.Hash(m.ID)
-		h.Hash(m.Mode)
-		h.Hash(m.Name)
-		h.Hash(m.Status)
-		h.Hash(m.End.Unix())
-		h.Hash(m.Start.Unix())
+		_ = h.Hash(m.ID)
+		_ = h.Hash(m.Mode)
+		_ = h.Hash(m.Name)
+		_ = h.Hash(m.Status)
+		_ = h.Hash(m.End.Unix())
+		_ = h.Hash(m.Start.Unix())
 		m.hash = h.Segment()
 	}
 	return m.hash
 }
+
+func unmarshalRawField(m map[string]json.RawMessage, key string, out interface{}) error {
+	x, ok := m[key]
+	if !ok {
+		return nil
+	}
+	return json.Unmarshal(x, out)
+}
+
 func (g *game) UnmarshalJSON(b []byte) error {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(b, &m); err != nil {
 		return err
 	}
-	if x, ok := m["name"]; ok {
-		if err := json.Unmarshal(x, &g.Meta.Name); err != nil {
-			return err
-		}
+	fields := []struct {
+		key string
+		dst interface{}
+	}{
+		{key: "name", dst: &g.Meta.Name},
+		{key: "mode", dst: &g.Meta.Mode},
+		{key: "credit", dst: &g.Credit},
+		{key: "message", dst: &g.Message},
+		{key: "teams", dst: &g.Teams},
+		{key: "events", dst: &g.Events.Current},
 	}
-	if x, ok := m["mode"]; ok {
-		if err := json.Unmarshal(x, &g.Meta.Mode); err != nil {
-			return err
-		}
-	}
-	if x, ok := m["credit"]; ok {
-		if err := json.Unmarshal(x, &g.Credit); err != nil {
-			return err
-		}
-	}
-	if x, ok := m["message"]; ok {
-		if err := json.Unmarshal(x, &g.Message); err != nil {
-			return err
-		}
-	}
-	if x, ok := m["teams"]; ok {
-		if err := json.Unmarshal(x, &g.Teams); err != nil {
-			return err
-		}
-	}
-	if x, ok := m["events"]; ok {
-		if err := json.Unmarshal(x, &g.Events.Current); err != nil {
+	for i := range fields {
+		if err := unmarshalRawField(m, fields[i].key, fields[i].dst); err != nil {
 			return err
 		}
 	}
 	return nil
 }
-func (g *game) Compare(p *planner, o *game) {
-	p.Prefix("game")
-	if o != nil && o.hash == g.hash && len(o.Teams) == len(g.Teams) {
-		p.Value("status", "", "status")
-		p.Value("credit", g.Credit, "game-credit")
-		p.Value("message", g.Message, "game-message")
-		g.Meta.Compare(p, o.Meta)
-		g.Events.Compare(p, o.Events)
-		g.compareTweets(p, o)
-		for i := range g.Teams {
-			g.Teams[i].Compare(p, o.Teams[i])
-		}
-		p.rollbackPrefix()
-		return
+
+func (g *game) hasFastCompare(old *game) bool {
+	return old != nil && old.hash == g.hash && len(old.Teams) == len(g.Teams)
+}
+
+func (g *game) compareFast(p *planner, old *game) {
+	p.Value("status", "", "status")
+	p.Value("credit", g.Credit, "game-credit")
+	p.Value("message", g.Message, "game-message")
+	g.Meta.Compare(p, old.Meta)
+	g.Events.Compare(p, old.Events)
+	g.compareTweets(p, old)
+	for i := range g.Teams {
+		g.Teams[i].Compare(p, old.Teams[i])
 	}
+}
+
+func (g *game) compareBaseDelta(p *planner) {
 	p.DeltaValue("status", "", "status")
 	p.DeltaValue("credit", g.Credit, "game-credit")
 	p.DeltaValue("message", g.Message, "game-message")
-	c := make(compare)
-	if o != nil {
-		g.Meta.Compare(p, o.Meta)
-		g.Events.Compare(p, o.Events)
-		g.compareTweets(p, o)
-		for i := range o.Teams {
-			c.One(o.Teams[i])
-		}
-	} else {
+}
+
+func (g *game) compareMetaEventsTweets(p *planner, old *game) {
+	if old == nil {
 		g.Meta.Compare(p, emptyMeta)
 		g.Events.Compare(p, emptyEvents)
 		g.compareTweets(p, nil)
+		return
+	}
+	g.Meta.Compare(p, old.Meta)
+	g.Events.Compare(p, old.Events)
+	g.compareTweets(p, old)
+}
+
+func (g *game) teamCompareMap(old *game) compare {
+	c := make(compare)
+	if old != nil {
+		for i := range old.Teams {
+			c.One(old.Teams[i])
+		}
 	}
 	for i := range g.Teams {
 		c.Two(g.Teams[i])
 	}
-	for k, v := range c {
-		switch {
-		case !v.Second():
-			p.Remove("team-t" + strconv.FormatUint(k, 10))
-		case !v.First():
-			v.B.(team).Compare(p, emptyTeam)
-		default:
-			v.B.(team).Compare(p, v.A.(team))
-		}
+	return c
+}
+
+func applyTeamCompare(p *planner, k uint64, v *delta) {
+	switch {
+	case !v.Second():
+		p.Remove("team-t" + strconv.FormatUint(k, 10))
+	case !v.First():
+		v.B.(team).Compare(p, emptyTeam)
+	default:
+		v.B.(team).Compare(p, v.A.(team))
 	}
+}
+
+func (g *game) compareTeamsByMap(p *planner, old *game) {
+	c := g.teamCompareMap(old)
+	for k, v := range c {
+		applyTeamCompare(p, k, v)
+	}
+}
+
+func (g *game) Compare(p *planner, o *game) {
+	p.Prefix("game")
+	if g.hasFastCompare(o) {
+		g.compareFast(p, o)
+		p.rollbackPrefix()
+		return
+	}
+	g.compareBaseDelta(p)
+	g.compareMetaEventsTweets(p, o)
+	g.compareTeamsByMap(p, o)
 	p.rollbackPrefix()
 }
 func (m meta) Compare(p *planner, old meta) {
@@ -239,7 +266,7 @@ func (g *game) Delta(s string, old *game) ([]update, []update) {
 	sort.Sort(g)
 	if g.hash == 0 {
 		h := hashers.Get().(*hasher)
-		h.Hash(g.Message)
+		_ = h.Hash(g.Message)
 		g.hash = h.Segment()
 		g.Meta.Hash(h)
 		for i := range g.Teams {

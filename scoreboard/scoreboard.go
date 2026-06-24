@@ -24,16 +24,18 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"text/template"
 	"time"
 
-	"github.com/PvJScorebot/scorebot-scoreboard/scoreboard/game"
+	"github.com/CTFfactory/Scorebot-Scoreboard/scoreboard/game"
 	"github.com/gorilla/websocket"
 )
 
@@ -49,12 +51,55 @@ type Scoreboard struct {
 	fs http.Handler
 	*game.Manager
 	*http.Server
-	ws     *websocket.Upgrader
-	html   *template.Template
-	key    string
-	cert   string
-	dir    http.FileSystem
-	expire time.Duration
+	ws   *websocket.Upgrader
+	html *template.Template
+	key  string
+	cert string
+	dir  http.FileSystem
+}
+
+func configDirectoryPaths(directory string) (templateDir, publicDir string, err error) {
+	if len(directory) == 0 {
+		return "", "", nil
+	}
+	publicDir = filepath.Join(directory, "public")
+	d, err := os.Stat(publicDir)
+	if err != nil {
+		return "", "", err
+	}
+	if !d.IsDir() {
+		return "", "", fs.ErrInvalid
+	}
+	return filepath.Join(directory, "template"), publicDir, nil
+}
+
+func loadCoreTemplates(t *template.Template, directory string) error {
+	for _, name := range []string{"home.html", "scoreboard.html"} {
+		if err := getTemplate(t, directory, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func newHTTPServer(addr string, timeout time.Duration) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           new(http.ServeMux),
+		ReadTimeout:       timeout,
+		IdleTimeout:       timeout,
+		WriteTimeout:      timeout,
+		ReadHeaderTimeout: timeout,
+	}
+}
+
+func newWebSocketUpgrader(timeout time.Duration) *websocket.Upgrader {
+	return &websocket.Upgrader{
+		CheckOrigin:      checkWebSocketOrigin,
+		ReadBufferSize:   1024,
+		WriteBufferSize:  1024,
+		HandshakeTimeout: timeout,
+	}
 }
 
 func (s *Scoreboard) Run() error {
@@ -62,11 +107,12 @@ func (s *Scoreboard) Run() error {
 		err  error
 		w    = make(chan os.Signal, 1)
 		x, c = context.WithCancel(context.Background())
+		l    sync.Mutex
 	)
 	s.BaseContext = func(_ net.Listener) context.Context { return x }
 	signal.Notify(w, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	slog.Info("Starting Scoreboard service..")
-	go s.listen(&err, c)
+	go s.listen(&err, &l, c)
 	go s.Start(x)
 	select {
 	case <-w:
@@ -74,8 +120,12 @@ func (s *Scoreboard) Run() error {
 	}
 	signal.Stop(w)
 	close(w)
-	if c(); err != nil {
-		slog.Error("Received error during runtime", "error", err.Error())
+	c()
+	l.Lock()
+	runtimeErr := err
+	l.Unlock()
+	if runtimeErr != nil {
+		slog.Error("Received error during runtime", "error", runtimeErr.Error())
 	}
 	slog.Info("Stopping and shutting down..")
 	f, u := context.WithTimeout(x, s.ReadTimeout)
@@ -86,49 +136,24 @@ func (s *Scoreboard) Run() error {
 }
 
 func (c config) New() (*Scoreboard, error) {
-	var (
-		t   = time.Second * time.Duration(c.Timeout)
-		err error
-		x, p string
-	)
-	if len(c.Directory) > 0 {
-		p = filepath.Join(c.Directory, "public")
-		var d fs.FileInfo
-		if d, err = os.Stat(p); err != nil {
-			return nil, err
-		}
-		if !d.IsDir() {
-			return nil, fs.ErrInvalid
-		}
-		x = filepath.Join(c.Directory, "template")
+	timeout := time.Second * time.Duration(c.Timeout)
+	templateDir, publicDir, err := configDirectoryPaths(c.Directory)
+	if err != nil {
+		return nil, err
 	}
 	var s Scoreboard
 	s.html = template.New("base")
-	if err = getTemplate(s.html, x, "home.html"); err != nil {
+	if err := loadCoreTemplates(s.html, templateDir); err != nil {
 		return nil, err
 	}
-	if err = getTemplate(s.html, x, "scoreboard.html"); err != nil {
+	s.Manager, err = game.New(c.Scorebot, c.Assets, time.Duration(c.Tick)*time.Second, timeout)
+	if err != nil {
 		return nil, err
 	}
-	if s.Manager, err = game.New(c.Scorebot, c.Assets, time.Duration(c.Tick)*time.Second, t); err != nil {
-		return nil, err
-	}
-	s.Server = &http.Server{
-		Addr:              c.Listen,
-		Handler:           new(http.ServeMux),
-		ReadTimeout:       t,
-		IdleTimeout:       t,
-		WriteTimeout:      t,
-		ReadHeaderTimeout: t,
-	}
-	s.ws = &websocket.Upgrader{
-		CheckOrigin:      func(_ *http.Request) bool { return true },
-		ReadBufferSize:   1024,
-		WriteBufferSize:  1024,
-		HandshakeTimeout: t,
-	}
+	s.Server = newHTTPServer(c.Listen, timeout)
+	s.ws = newWebSocketUpgrader(timeout)
 	s.key, s.cert = c.Key, c.Cert
-	s.fs, s.dir = http.FileServer(http.FS(&s)), http.Dir(p)
+	s.fs, s.dir = http.FileServer(http.FS(&s)), http.Dir(publicDir)
 	s.Server.Handler.(*http.ServeMux).HandleFunc("/", s.http)
 	s.Server.Handler.(*http.ServeMux).HandleFunc("/w", s.httpWebsocket)
 	return &s, nil
@@ -147,15 +172,32 @@ func (s *Scoreboard) Open(n string) (fs.File, error) {
 }
 
 func getTemplate(t *template.Template, d, f string) error {
-	if len(d) > 0 {
-		s := filepath.Join(d, f)
-		if i, err := os.Stat(s); err == nil && !i.IsDir() {
-			if _, err = t.New(f).ParseFiles(s); err != nil {
-				return err
-			}
-			return nil
-		}
+	parsed, err := parseOverrideTemplate(t, d, f)
+	if err != nil {
+		return err
 	}
+	if parsed {
+		return nil
+	}
+	return parseEmbeddedTemplate(t, f)
+}
+
+func parseOverrideTemplate(t *template.Template, d, f string) (bool, error) {
+	if len(d) == 0 {
+		return false, nil
+	}
+	s := filepath.Join(d, f)
+	i, err := os.Stat(s)
+	if err != nil || i.IsDir() {
+		return false, nil
+	}
+	if _, err := t.New(f).ParseFiles(s); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func parseEmbeddedTemplate(t *template.Template, f string) error {
 	b, err := resources.ReadFile("html/template/" + f)
 	if err != nil {
 		return err
@@ -166,9 +208,40 @@ func getTemplate(t *template.Template, d, f string) error {
 	return nil
 }
 
-func (s *Scoreboard) listen(err *error, f context.CancelFunc) {
+func checkWebSocketOrigin(r *http.Request) bool {
+	_, ok := sameHostOrigin(r)
+	return ok
+}
+
+func sameHostOrigin(r *http.Request) (string, bool) {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if len(origin) == 0 {
+		return "", false
+	}
+	u, err := url.Parse(origin)
+	if err != nil || len(u.Host) == 0 || len(u.Scheme) == 0 {
+		return "", false
+	}
+	if !strings.EqualFold(u.Host, r.Host) {
+		return "", false
+	}
+	return origin, true
+}
+
+func setSameHostCORSHeader(w http.ResponseWriter, r *http.Request) {
+	origin, ok := sameHostOrigin(r)
+	if !ok {
+		return
+	}
+	w.Header().Set("Access-Control-Allow-Origin", origin)
+	w.Header().Add("Vary", "Origin")
+}
+
+func (s *Scoreboard) listen(err *error, l *sync.Mutex, f context.CancelFunc) {
 	if len(s.cert) == 0 || len(s.key) == 0 {
+		l.Lock()
 		*err = s.ListenAndServe()
+		l.Unlock()
 		f()
 		return
 	}
@@ -185,48 +258,70 @@ func (s *Scoreboard) listen(err *error, f context.CancelFunc) {
 		},
 		CurvePreferences: []tls.CurveID{tls.CurveP256, tls.X25519},
 	}
+	l.Lock()
 	*err = s.ListenAndServeTLS(s.cert, s.key)
+	l.Unlock()
 	f()
 }
 
 func (s *Scoreboard) http(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	if !isGet(r.Method) {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	if len(r.URL.Path) <= 1 || r.URL.Path == "/" {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := s.html.ExecuteTemplate(w, "home.html", s.Games); err != nil {
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			slog.Error("Error during home template execution", "error", err.Error())
-		}
+	setSameHostCORSHeader(w, r)
+	if isHomePath(r.URL.Path) {
+		s.renderHome(w)
 		return
 	}
-	var (
-		v uint64
-		n = strings.Trim(r.URL.Path, "/")
-		i = strings.IndexRune(n, '/')
-	)
+	v, ok := s.resolveGameID(r.URL.Path)
+	if !ok {
+		s.fs.ServeHTTP(w, r)
+		return
+	}
+	s.renderScoreboard(w, r, v)
+}
+
+func isGet(method string) bool {
+	return method == http.MethodGet
+}
+
+func isHomePath(path string) bool {
+	return len(path) <= 1 || path == "/"
+}
+
+func (s *Scoreboard) renderHome(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.html.ExecuteTemplate(w, "home.html", s.Games); err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		slog.Error("Error during home template execution", "error", err.Error())
+	}
+}
+
+func (s *Scoreboard) resolveGameID(path string) (uint64, bool) {
+	n := strings.Trim(path, "/")
 	if len(n) == 0 {
-		s.fs.ServeHTTP(w, r)
-		return
+		return 0, false
 	}
-	switch {
-	case i < 0:
-		v = s.Game(n)
-	case strings.ToLower(n[:i]) == "game":
-		if x, err := strconv.Atoi(n[i+1:]); err == nil {
-			v = uint64(x)
-		}
+	i := strings.IndexRune(n, '/')
+	if i < 0 {
+		v := s.Game(n)
+		return v, v > 0
 	}
-	if v == 0 {
-		s.fs.ServeHTTP(w, r)
-		return
+	if strings.ToLower(n[:i]) != "game" {
+		return 0, false
 	}
+	x, err := strconv.ParseUint(n[i+1:], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return x, x > 0
+}
+
+func (s *Scoreboard) renderScoreboard(w http.ResponseWriter, r *http.Request, gameID uint64) {
 	slog.Debug("Received scoreboard request", "remote", r.RemoteAddr)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.html.ExecuteTemplate(w, "scoreboard.html", &display{Game: v, Twitter: false}); err != nil {
+	if err := s.html.ExecuteTemplate(w, "scoreboard.html", &display{Game: gameID, Twitter: false}); err != nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		slog.Error("Error during scoreboard template execution", "remote", r.RemoteAddr, "error", err.Error())
 	}

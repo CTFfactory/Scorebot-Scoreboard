@@ -585,42 +585,124 @@ function set_beacon_image(beacon) {
     image.crossOrigin = "anonymous";
     image.src = "/image/beacon.png";
 }
+function clear_children(node) {
+    if (!node) {
+        return;
+    }
+    while (node.firstChild) {
+        node.removeChild(node.firstChild);
+    }
+}
+function text_or_empty(value) {
+    if (value === undefined || value === null) {
+        return "";
+    }
+    if (typeof value === "string") {
+        return value;
+    }
+    return String(value);
+}
+function append_text_lines(node, value) {
+    let lines = text_or_empty(value).split("\n");
+    for (let i = 0; i < lines.length; i++) {
+        if (i > 0) {
+            node.appendChild(document.createElement("br"));
+        }
+        node.appendChild(document.createTextNode(lines[i]));
+    }
+}
+function youtube_embed_url(video, start) {
+    let clean_video = text_or_empty(video).trim();
+    if (!/^[A-Za-z0-9_-]{11}$/.test(clean_video)) {
+        return "";
+    }
+    let url = "https://www.youtube-nocookie.com/embed/" + clean_video + "?controls=0&autoplay=1";
+    let start_time = parseInt(start, 10);
+    if (!isNaN(start_time) && start_time >= 0) {
+        url += "&start=" + start_time;
+    }
+    return url;
+}
+function sanitize_effect_html(raw_html) {
+    let template = document.createElement("template");
+    template.innerHTML = text_or_empty(raw_html);
+    let blocked = template.content.querySelectorAll("script,iframe,object,embed,link,meta");
+    for (let i = 0; i < blocked.length; i++) {
+        blocked[i].remove();
+    }
+    let elements = template.content.querySelectorAll("*");
+    for (let i = 0; i < elements.length; i++) {
+        let attrs = elements[i].attributes;
+        for (let j = attrs.length - 1; j >= 0; j--) {
+            let name = attrs[j].name.toLowerCase();
+            let value = attrs[j].value.trim().toLowerCase();
+            if (name.indexOf("on") === 0 || name === "srcdoc") {
+                elements[i].removeAttribute(attrs[j].name);
+                continue;
+            }
+            if (name === "href" || name === "src" || name === "xlink:href") {
+                if (value.indexOf("javascript:") === 0 || value.indexOf("data:text/html") === 0) {
+                    elements[i].removeAttribute(attrs[j].name);
+                    continue;
+                }
+            }
+            if (name === "style") {
+                if (value.indexOf("expression(") >= 0 || value.indexOf("javascript:") >= 0 || value.indexOf("url(data:text/html") >= 0) {
+                    elements[i].removeAttribute(attrs[j].name);
+                }
+            }
+        }
+    }
+    return template.content;
+}
 function handle_event_popup(event) {
+    let data = event.data || {};
     if (event.remove) {
         document.sb_event.style.display = "none";
-        document.sb_event_data.innerHTML = "";
+        clear_children(document.sb_event_data);
         document.sb_event_title.innerText = "";
         debug("Removed window event.");
         return;
     }
-    if (event.data.title) {
-        document.sb_event_title.innerText = event.data.title;
+    if (data.title) {
+        document.sb_event_title.innerText = data.title;
     } else {
         document.sb_event_title.innerText = "COMPROMISE DETECTED!!!";
     }
-    if (!event.data.fullscreen || event.data.fullscreen.toLowerCase() === "false") {
+    if (!data.fullscreen || data.fullscreen.toLowerCase() === "false") {
         document.sb_event.classList.remove("fullscreen");
     } else {
         document.sb_event.classList.add("fullscreen");
     }
+    clear_children(document.sb_event_data);
     if (event.value === "3") {
-        if (!(event.data.video)) {
+        if (!(data.video)) {
             return;
         }
-        let youtube_url = "https://www.youtube-nocookie.com/embed/" + event.data.video + "?controls=0&amp;autoplay=1";
-        if (event.data.start) {
-            youtube_url = youtube_url + "&amp;start=" + event.data.start;
+        let youtube_url = youtube_embed_url(data.video, data.start);
+        if (youtube_url.length === 0) {
+            return;
         }
-        document.sb_event_data.innerHTML = '<iframe width="100%" height=100%" src="' + youtube_url + '" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope"></iframe>';
+        let frame = document.createElement("iframe");
+        frame.setAttribute("width", "100%");
+        frame.setAttribute("height", "100%");
+        frame.setAttribute("src", youtube_url);
+        frame.setAttribute("frameborder", "0");
+        frame.setAttribute("allow", "accelerometer; autoplay; encrypted-media; gyroscope");
+        frame.setAttribute("referrerpolicy", "no-referrer");
+        document.sb_event_data.appendChild(frame);
         document.sb_event.style.display = "block";
         debug("Video event shown!");
     } else {
-        document.sb_event_data.innerHTML = "<div>" + event.data.text + "</div>";
+        let text = document.createElement("div");
+        text.innerText = text_or_empty(data.text);
+        document.sb_event_data.appendChild(text);
         document.sb_event.style.display = "block";
         debug("Window event shown!");
     }
 }
 function handle_event_effect(event) {
+    let data = event.data || {};
     if (event.remove) {
         let effect = document.getElementById("eff-" + event.id);
         if (effect !== null) {
@@ -630,19 +712,12 @@ function handle_event_effect(event) {
     }
     let container = document.createElement("div");
     container.id = "eff-" + event.id;
-    container.innerHTML = event.data.html;
+    container.appendChild(sanitize_effect_html(data.html));
     document.sb_effect.appendChild(container);
     debug("Added effect event!");
-    let scripts = container.getElementsByTagName("script");
-    if (scripts.length === 0) {
-        return;
-    }
-    debug("Triggering event scripts");
-    for (let i = 0; i < scripts.length; i++) {
-        eval(scripts[i].text);
-    }
 }
 function handle_event_message(event) {
+    let data = event.data || {};
     if (event.remove) {
         let event_message = document.getElementById("msg-" + event.id);
         if (event_message !== null) {
@@ -653,14 +728,16 @@ function handle_event_message(event) {
     let message = document.createElement("div");
     message.id = "msg-" + event.id;
     message.classList.add("message");
-    if (event.data.command && event.data.command.length > 0) {
-        if (event.data.response && event.data.response.length > 0) {
-            message.innerHTML = "[root@localhost ~]# " + event.data.text + "<br/>" + event.data.response.replace("\n", "<br/>");
+    if (data.command && data.command.length > 0) {
+        if (data.response && data.response.length > 0) {
+            append_text_lines(message, "[root@localhost ~]# " + text_or_empty(data.text));
+            message.appendChild(document.createElement("br"));
+            append_text_lines(message, data.response);
         } else {
-            message.innerText = "[root@localhost ~]# " + event.data.text;
+            message.innerText = "[root@localhost ~]# " + text_or_empty(data.text);
         }
     } else {
-        message.innerText = "[root@localhost ~]# echo " + event.data.text + " > /dev/null";
+        message.innerText = "[root@localhost ~]# echo " + text_or_empty(data.text) + " > /dev/null";
     }
     document.sb_message.appendChild(message);
     document.sb_message.scrollTop = document.sb_message.offsetHeight;

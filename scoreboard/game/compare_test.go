@@ -1,0 +1,271 @@
+package game
+
+import "testing"
+
+func TestScoreComparisons(t *testing.T) {
+	var h hasher
+
+	s1 := score{Total: 10, Health: 20}
+	_ = s1.Hash(&h)
+	s2 := score{Total: 10, Health: 20}
+	_ = s2.Hash(&h)
+	p := new(planner)
+	s1.Compare(p, s2)
+	if len(p.Delta) != 0 || len(p.Create) != 2 {
+		t.Fatalf("expected create-only updates for equal scores")
+	}
+
+	p = new(planner)
+	s3 := score{Total: 99, Health: 20}
+	_ = s3.Hash(&h)
+	s3.Compare(p, s1)
+	if len(p.Delta) == 0 {
+		t.Fatalf("expected delta updates for changed scores")
+	}
+}
+
+func TestScoreFlagAndTicketComparisons(t *testing.T) {
+	var h hasher
+	sf := scoreFlag{Open: 1, Lost: 2, Captured: 3}
+	_ = sf.Hash(&h)
+	p := new(planner)
+	sf.Compare(p, scoreFlag{})
+	if len(p.Delta) == 0 {
+		t.Fatalf("expected delta updates for new score flags")
+	}
+	// This captures the existing field ID emitted by the current implementation.
+	if !containsUpdateID(p.Delta, "score-fpen") {
+		t.Fatalf("expected score-fpen update id in current behavior")
+	}
+
+	st := scoreTicket{Open: 4, Closed: 5}
+	_ = st.Hash(&h)
+	p = new(planner)
+	st.Compare(p, scoreTicket{})
+	if len(p.Delta) == 0 {
+		t.Fatalf("expected delta updates for new ticket scores")
+	}
+}
+
+func TestHostServiceAndBeaconComparison(t *testing.T) {
+	var h hasher
+
+	svc := service{ID: 11, Port: 80, State: green, Protocol: tcp, Bonus: true}
+	_ = svc.Hash(&h)
+	hs := host{
+		ID:       10,
+		Name:     "host-a",
+		Online:   true,
+		Services: []service{svc},
+	}
+	_ = hs.Hash(&h)
+
+	p := new(planner)
+	hs.Compare(p, emptyHost)
+	if len(p.Delta) == 0 {
+		t.Fatalf("expected delta updates for new host")
+	}
+
+	old := hs
+	p = new(planner)
+	hs.Compare(p, old)
+	if len(p.Delta) != 0 {
+		t.Fatalf("expected no delta updates for equivalent host")
+	}
+
+	b := beacon{ID: 1, Team: 2, Color: "#fff"}
+	_ = b.Hash(&h)
+	p = new(planner)
+	b.Compare(p, emptyBeacon)
+	if len(p.Delta) == 0 {
+		t.Fatalf("expected delta updates for new beacon")
+	}
+}
+
+func TestHostCompareServiceRemovalPath(t *testing.T) {
+	var h hasher
+	old := host{
+		ID:     55,
+		Name:   "host-b",
+		Online: false,
+		Services: []service{
+			{ID: 1, Port: 80, State: green, Protocol: tcp},
+			{ID: 2, Port: 443, State: yellow, Protocol: tcp},
+		},
+	}
+	cur := host{
+		ID:     55,
+		Name:   "host-b",
+		Online: false,
+		Services: []service{
+			{ID: 1, Port: 80, State: green, Protocol: tcp},
+		},
+	}
+	_ = old.Hash(&h)
+	_ = cur.Hash(&h)
+
+	p := new(planner)
+	cur.Compare(p, old)
+	if !containsUpdateID(p.Delta, "-host-h55-s2") {
+		t.Fatalf("expected removed service delta for dropped service id 2")
+	}
+}
+
+func TestTeamComparison(t *testing.T) {
+	var h hasher
+
+	tm := team{
+		ID:      5,
+		Name:    "Blue",
+		Logo:    "/logo.png",
+		Color:   "#123",
+		Minimal: true,
+		Offense: true,
+		Hosts: []host{
+			{
+				ID:       8,
+				Name:     "srv",
+				Online:   true,
+				Services: []service{{ID: 9, Port: 443, State: yellow, Protocol: tcp}},
+			},
+		},
+		Beacons: []beacon{{ID: 7, Team: 5, Color: "#999"}},
+		Score:   score{Total: 1, Health: 2},
+		Flags:   scoreFlag{Open: 1, Lost: 0, Captured: 0},
+		Tickets: scoreTicket{Open: 2, Closed: 1},
+	}
+	_ = tm.Hash(&h)
+
+	p := new(planner)
+	tm.Compare(p, emptyTeam)
+	if len(p.Delta) == 0 || len(p.Create) == 0 {
+		t.Fatalf("expected team compare to emit updates for empty old team")
+	}
+
+	old := tm
+	p = new(planner)
+	tm.Compare(p, old)
+	if len(p.Delta) != 0 {
+		t.Fatalf("expected no delta updates for equivalent team")
+	}
+}
+
+func TestTeamSortHelpers(t *testing.T) {
+	tm := team{
+		Hosts: []host{
+			{Name: "z-host"},
+			{Name: "a-host"},
+		},
+	}
+	if !tm.Less(1, 0) {
+		t.Fatalf("expected Less to compare host names lexicographically")
+	}
+	tm.Swap(0, 1)
+	if tm.Hosts[0].Name != "a-host" {
+		t.Fatalf("expected Swap to exchange host positions")
+	}
+}
+
+func TestApplyTeamCompareBranches(t *testing.T) {
+	p := new(planner)
+	applyTeamCompare(p, 11, &delta{A: team{ID: 11}})
+	if !containsUpdateID(p.Delta, "team-t11") {
+		t.Fatalf("expected remove path to emit team-t11 update")
+	}
+
+	p = new(planner)
+	applyTeamCompare(p, 12, &delta{B: team{ID: 12, Name: "new"}})
+	if !containsUpdateID(p.Delta, "team-t12") {
+		t.Fatalf("expected add path to emit team-t12 update")
+	}
+
+	p = new(planner)
+	old := team{ID: 13, Name: "old"}
+	cur := team{ID: 13, Name: "cur"}
+	_ = old.Hash(new(hasher))
+	_ = cur.Hash(new(hasher))
+	applyTeamCompare(p, 13, &delta{A: old, B: cur})
+	if !containsUpdateID(p.Create, "team-t13") {
+		t.Fatalf("expected compare path to emit team-t13 create update")
+	}
+}
+
+func TestTeamMapHelpersCoverAllDeltaBranches(t *testing.T) {
+	p := new(planner)
+	previous := team{
+		ID:      1,
+		Name:    "old",
+		Hosts:   []host{{ID: 1, Name: "same"}, {ID: 3, Name: "removed"}},
+		Beacons: []beacon{{ID: 1, Team: 1, Color: "#111"}, {ID: 3, Team: 1, Color: "#333"}},
+	}
+	current := team{
+		ID:      1,
+		Name:    "new",
+		Hosts:   []host{{ID: 1, Name: "same-new"}, {ID: 2, Name: "added"}},
+		Beacons: []beacon{{ID: 1, Team: 1, Color: "#999"}, {ID: 2, Team: 1, Color: "#222"}},
+	}
+	current.compareHostsByMap(p, previous)
+	current.compareBeaconsByMap(p, previous)
+
+	if !containsUpdateID(p.Delta, "host-h3") {
+		t.Fatalf("expected removed host delta")
+	}
+	if !containsUpdateID(p.Delta, "beacon-con-b3") {
+		t.Fatalf("expected removed beacon delta")
+	}
+	if !containsUpdateID(p.Create, "host-h2") {
+		t.Fatalf("expected added host updates")
+	}
+	if !containsUpdateID(p.Create, "beacon-con-b2") {
+		t.Fatalf("expected added beacon updates")
+	}
+	if !containsUpdateID(p.Create, "host-h1") || !containsUpdateID(p.Create, "beacon-con-b1") {
+		t.Fatalf("expected compare path updates for existing host and beacon")
+	}
+}
+
+func TestHostWriteStateDeltaBranches(t *testing.T) {
+	p := new(planner)
+	host{Online: true}.writeStateDelta(p)
+	if len(p.Delta) == 0 || p.Delta[0].Value != "-offline" {
+		t.Fatalf("expected online host to emit -offline delta")
+	}
+
+	p = new(planner)
+	host{Online: false}.writeStateDelta(p)
+	if len(p.Delta) == 0 || p.Delta[0].Value != "+offline" {
+		t.Fatalf("expected offline host to emit +offline delta")
+	}
+}
+
+func TestGameTeamCompareMapNilAndNonNilOld(t *testing.T) {
+	current := &game{
+		Teams: []team{{ID: 1}, {ID: 2}},
+	}
+	old := &game{
+		Teams: []team{{ID: 1}, {ID: 3}},
+	}
+
+	m := current.teamCompareMap(old)
+	if len(m) != 3 {
+		t.Fatalf("expected map to include merged old/new team ids, got %d", len(m))
+	}
+	if _, ok := m[3]; !ok {
+		t.Fatalf("expected removed team id from old snapshot to be present")
+	}
+
+	m = current.teamCompareMap(nil)
+	if len(m) != 2 {
+		t.Fatalf("expected map to contain current teams when old is nil, got %d", len(m))
+	}
+	if _, ok := m[1]; !ok {
+		t.Fatalf("expected current team id to be present when old is nil")
+	}
+}
+
+func TestGameUnmarshalJSONInvalidPayload(t *testing.T) {
+	var g game
+	if err := g.UnmarshalJSON([]byte("{")); err == nil {
+		t.Fatalf("expected unmarshal error for invalid JSON payload")
+	}
+}

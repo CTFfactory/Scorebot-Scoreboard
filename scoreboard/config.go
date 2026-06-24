@@ -21,7 +21,6 @@ import (
 	"flag"
 	"log/slog"
 	"os"
-
 )
 
 var version = "unknown"
@@ -61,6 +60,65 @@ type config struct {
 	Tick      int    `json:"tick"`
 }
 
+func newFlags(c *config) (*flag.FlagSet, *bool, *bool, *string) {
+	var (
+		args = flag.NewFlagSet("Scorebot Scoreboard", flag.ContinueOnError)
+		d    bool
+		V    bool
+		s    string
+	)
+	args.Usage = func() {
+		os.Stdout.WriteString(usage)
+	}
+	args.StringVar(&s, "c", "", "")
+	args.BoolVar(&d, "d", false, "")
+	args.BoolVar(&V, "V", false, "")
+	args.StringVar(&c.Scorebot, "sbe", "", "")
+	args.StringVar(&c.Assets, "assets", "", "")
+	args.StringVar(&c.Directory, "dir", "", "")
+	args.IntVar(&c.Tick, "tick", 5, "")
+	args.IntVar(&c.Timeout, "timeout", 10, "")
+	args.StringVar(&c.Listen, "bind", "0.0.0.0:8080", "")
+	args.StringVar(&c.Key, "key", "", "")
+	args.StringVar(&c.Cert, "cert", "", "")
+	return args, &d, &V, &s
+}
+
+func parseFlags(args *flag.FlagSet) error {
+	if err := args.Parse(os.Args[1:]); err != nil {
+		return flag.ErrHelp
+	}
+	return nil
+}
+
+func handleCmdlineOutput(V, d bool) (*Scoreboard, bool) {
+	if V {
+		os.Stdout.WriteString("Scorebot Scoreboard: " + version + "\n")
+		return nil, true
+	}
+	if d {
+		os.Stdout.WriteString(defaults)
+		return nil, true
+	}
+	return nil, false
+}
+
+func loadConfigFile(c *config, file string) error {
+	if len(file) == 0 {
+		return nil
+	}
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, c)
+}
+
+func initLogger() {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(logger)
+}
+
 func (c *config) verify() error {
 	if c.Tick <= 0 {
 		c.Tick = 5
@@ -75,58 +133,22 @@ func (c *config) verify() error {
 }
 
 func Cmdline() (*Scoreboard, error) {
-	var (
-		c    config
-		args = flag.NewFlagSet("Scorebot Scoreboard", flag.ExitOnError)
-		d, V bool
-		s    string
-	)
-	args.Usage = func() {
-		os.Stdout.WriteString(usage)
-		os.Exit(2)
+	var c config
+	args, d, V, s := newFlags(&c)
+	if err := parseFlags(args); err != nil {
+		return nil, err
 	}
-	args.StringVar(&s, "c", "", "")
-	args.BoolVar(&d, "d", false, "")
-	args.BoolVar(&V, "V", false, "")
-	args.StringVar(&c.Scorebot, "sbe", "", "")
-	args.StringVar(&c.Assets, "assets", "", "")
-	args.StringVar(&c.Directory, "dir", "", "")
-	args.IntVar(&c.Tick, "tick", 5, "")
-	args.IntVar(&c.Timeout, "timeout", 10, "")
-	args.StringVar(&c.Listen, "bind", "0.0.0.0:8080", "")
-	args.StringVar(&c.Key, "key", "", "")
-	args.StringVar(&c.Cert, "cert", "", "")
-
-	if err := args.Parse(os.Args[1:]); err != nil {
+	if _, ok := handleCmdlineOutput(*V, *d); ok {
+		return nil, nil
+	}
+	if len(*s) == 0 && len(c.Scorebot) == 0 {
 		os.Stdout.WriteString(usage)
 		return nil, flag.ErrHelp
 	}
-	if V {
-		os.Stdout.WriteString("Scorebot Scoreboard: " + version + "\n")
-		return nil, nil
-	}
-	if d {
-		os.Stdout.WriteString(defaults)
-		return nil, nil
-	}
-	if len(s) == 0 && len(c.Scorebot) == 0 {
-		os.Stdout.WriteString(usage)
-		return nil, flag.ErrHelp
-	}
-	if len(s) > 0 {
-		b, err := os.ReadFile(s)
-		if err != nil {
-			return nil, err
-		}
-		if err := json.Unmarshal(b, &c); err != nil {
-			return nil, err
-		}
+	if err := loadConfigFile(&c, *s); err != nil {
+		return nil, err
 	}
 	_ = c.verify()
-
-	// Initialize slog
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	slog.SetDefault(logger)
-
+	initLogger()
 	return c.New()
 }

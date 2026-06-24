@@ -28,13 +28,17 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-var errMissingGame = errors.New("game ID is missing from JSON data")
+var (
+	errMissingGame      = errors.New("game ID is missing from JSON data")
+	errEmptyGamePayload = errors.New("game is empty")
+)
 
 type hello uint64
 type stream struct {
@@ -52,6 +56,7 @@ type Manager struct {
 	Games   []meta
 	timeout time.Duration
 	running uint32
+	mu      sync.RWMutex
 }
 
 type subscription struct {
@@ -64,6 +69,8 @@ type subscription struct {
 }
 
 func (m *Manager) close() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for n, s := range m.subs {
 		for i := range s.clients {
 			s.clients[i].Close()
@@ -75,28 +82,123 @@ func (m *Manager) close() {
 	m.tick.Stop()
 }
 
+func isSlugSafeByte(b byte) bool {
+	return strings.IndexByte("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-._", b) >= 0
+}
+
 func cleanSlugString(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for i := range s {
-		switch {
-		case s[i] <= '9' && s[i] >= '0':
+		if isSlugSafeByte(s[i]) {
 			b.WriteByte(s[i])
-		case s[i] <= 'Z' && s[i] >= 'A':
-			b.WriteByte(s[i])
-		case s[i] <= 'z' && s[i] >= 'a':
-			b.WriteByte(s[i])
-		case s[i] == '-' || s[i] == '.' || s[i] == '_':
-			b.WriteByte(s[i])
-		default:
-			b.WriteByte('-')
+			continue
 		}
+		b.WriteByte('-')
 	}
 	return b.String()
 }
 
 func (m *Manager) Game(s string) uint64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.active[strings.ToLower(cleanSlugString(s))]
+}
+
+func (m *Manager) readHello(n *websocket.Conn) (hello, error) {
+	var h hello
+	if err := n.ReadJSON(&h); err != nil {
+		return 0, err
+	}
+	return h, nil
+}
+
+func (m *Manager) subscriptionByID(id uint64) *subscription {
+	m.mu.RLock()
+	s := m.subs[id]
+	m.mu.RUnlock()
+	return s
+}
+
+func (m *Manager) hydrateGameMeta(g *game) {
+	m.mu.RLock()
+	for i := range m.Games {
+		if m.Games[i].ID == g.Meta.ID {
+			g.Meta.End = m.Games[i].End
+			g.Meta.Start = m.Games[i].Start
+			g.Meta.Status = m.Games[i].Status
+			break
+		}
+	}
+	m.mu.RUnlock()
+}
+
+func (m *Manager) fetchGameForSubscription(id uint64) (game, error) {
+	var g game
+	if err := m.getJSON(context.Background(), "api/games/"+strconv.FormatUint(id, 10)+"/scoreboard", &g); err != nil {
+		return g, err
+	}
+	if len(g.Meta.Name) == 0 && len(g.Teams) == 0 {
+		return g, errEmptyGamePayload
+	}
+	g.Meta.ID = id
+	m.hydrateGameMeta(&g)
+	return g, nil
+}
+
+func (m *Manager) ensureSubscription(g game) *subscription {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s, ok := m.subs[g.Meta.ID]; ok && s != nil {
+		return s
+	}
+	s := &subscription{
+		ID:      g.Meta.ID,
+		new:     make(chan *websocket.Conn, 128),
+		last:    g,
+		clients: make([]*stream, 0, 1),
+	}
+	s.cache, _ = s.last.Delta(m.assets, nil)
+	m.subs[g.Meta.ID] = s
+	return s
+}
+
+func (m *Manager) resolveSubscription(id uint64, remote string) (*subscription, bool) {
+	if s := m.subscriptionByID(id); s != nil {
+		return s, true
+	}
+	slog.Debug("Checking Game ID requested by remote", "id", id, "remote", remote)
+	g, err := m.fetchGameForSubscription(id)
+	if err != nil {
+		if errors.Is(err, errEmptyGamePayload) {
+			slog.Error("Game is empty, ignoring", "id", id)
+			return nil, false
+		}
+		slog.Error("Error retrieving data for Game ID", "id", id, "error", err.Error())
+		return nil, false
+	}
+	return m.ensureSubscription(g), true
+}
+
+func (m *Manager) queueClientConnection(s *subscription, n *websocket.Conn) {
+	atomic.StoreUint32(&s.stale, 0)
+	m.mu.RLock()
+	cache := append([]update(nil), s.cache...)
+	m.mu.RUnlock()
+	_ = n.WriteJSON(cache)
+	m.mu.Lock()
+	if r, ok := m.subs[s.ID]; !ok || r != s {
+		m.mu.Unlock()
+		n.Close()
+		return
+	}
+	select {
+	case s.new <- n:
+		m.mu.Unlock()
+	default:
+		m.mu.Unlock()
+		n.Close()
+	}
 }
 
 func (m *Manager) New(n *websocket.Conn) {
@@ -105,50 +207,21 @@ func (m *Manager) New(n *websocket.Conn) {
 			slog.Error("Collection newclient function recovered from a panic", "error", err)
 		}
 	}()
-	slog.Debug("Received connection, listening for Hello", "remote", n.RemoteAddr().String())
-	var h hello
-	if err := n.ReadJSON(&h); err != nil {
-		slog.Error("Could not read Hello message", "remote", n.RemoteAddr().String(), "error", err.Error())
+	remote := n.RemoteAddr().String()
+	slog.Debug("Received connection, listening for Hello", "remote", remote)
+	h, err := m.readHello(n)
+	if err != nil {
+		slog.Error("Could not read Hello message", "remote", remote, "error", err.Error())
 		n.Close()
 		return
 	}
-	slog.Debug("Received Hello with requested Game ID", "id", h, "remote", n.RemoteAddr().String())
-	s, ok := m.subs[uint64(h)]
+	slog.Debug("Received Hello with requested Game ID", "id", h, "remote", remote)
+	s, ok := m.resolveSubscription(uint64(h), remote)
 	if !ok || s == nil {
-		slog.Debug("Checking Game ID requested by remote", "id", h, "remote", n.RemoteAddr().String())
-		var g game
-		// FastAPI core endpoint maps to /api/games/{id}/scoreboard
-		if err := m.getJSON(context.Background(), "api/games/"+strconv.FormatUint(uint64(h), 10)+"/scoreboard", &g); err != nil {
-			slog.Error("Error retrieving data for Game ID", "id", h, "error", err.Error())
-			n.Close()
-			return
-		}
-		if len(g.Meta.Name) == 0 && len(g.Teams) == 0 {
-			slog.Error("Game is empty, ignoring", "id", h)
-			n.Close()
-			return
-		}
-		g.Meta.ID = uint64(h)
-		for i := range m.Games {
-			if m.Games[i].ID == g.Meta.ID {
-				g.Meta.End = m.Games[i].End
-				g.Meta.Start = m.Games[i].Start
-				g.Meta.Status = m.Games[i].Status
-				break
-			}
-		}
-		s = &subscription{
-			ID:      g.Meta.ID,
-			new:     make(chan *websocket.Conn, 128),
-			last:    g,
-			clients: make([]*stream, 0, 1),
-		}
-		s.cache, _ = s.last.Delta(m.assets, nil)
-		m.subs[g.Meta.ID] = s
+		n.Close()
+		return
 	}
-	atomic.StoreUint32(&s.stale, 0)
-	_ = n.WriteJSON(s.cache)
-	s.new <- n
+	m.queueClientConnection(s, n)
 }
 
 func (m *Manager) Start(x context.Context) {
@@ -165,54 +238,88 @@ func (m *Manager) Start(x context.Context) {
 	}
 }
 
-func (m *Manager) update(x context.Context) {
-	slog.Debug("Starting update..")
-	if err := m.getJSON(x, "api/games", &m.Games); err != nil {
-		slog.Error("Error occurred during update tick", "error", err.Error())
-		return
+func contextDone(x context.Context) bool {
+	select {
+	case <-x.Done():
+		return true
+	default:
+		return false
 	}
+}
+
+func (m *Manager) fetchGames(x context.Context) ([]meta, bool) {
+	var games []meta
+	if err := m.getJSON(x, "api/games", &games); err != nil {
+		slog.Error("Error occurred during update tick", "error", err.Error())
+		return nil, false
+	}
+	return games, true
+}
+
+func (m *Manager) updateActiveGamesLocked() {
 	for i := range m.Games {
 		n := cleanSlugString(m.Games[i].Name)
 		if !m.Games[i].Active() {
 			delete(m.active, n)
 			continue
 		}
-		if _, ok := m.active[n]; !ok {
-			m.active[n] = m.Games[i].ID
-			slog.Debug("Added Game name mapping to ID", "name", n, "id", m.Games[i].ID)
+		if _, ok := m.active[n]; ok {
+			continue
 		}
+		m.active[n] = m.Games[i].ID
+		slog.Debug("Added Game name mapping to ID", "name", n, "id", m.Games[i].ID)
 	}
-	select {
-	case <-x.Done():
-		return
-	default:
-		break
-	}
-	var r []uint64
+}
+
+func (m *Manager) updateSubscriptionsLocked(x context.Context) ([]uint64, bool) {
+	var stale []uint64
 	for _, s := range m.subs {
 		if len(s.clients) == 0 {
 			if atomic.LoadUint32(&s.stale) == 1 {
-				r = append(r, s.ID)
+				stale = append(stale, s.ID)
 				continue
 			}
 			atomic.StoreUint32(&s.stale, 1)
 		}
-		select {
-		case <-x.Done():
-			return
-		default:
+		if contextDone(x) {
+			return stale, false
 		}
 		s.update(x, m)
 	}
-	for i := range r {
-		select {
-		case <-x.Done():
-			return
-		default:
+	return stale, true
+}
+
+func (m *Manager) removeStaleSubscriptionsLocked(x context.Context, stale []uint64) bool {
+	for i := range stale {
+		if contextDone(x) {
+			return false
 		}
-		slog.Debug("Removing unused subscription for Game", "id", r[i])
-		close(m.subs[r[i]].new)
-		delete(m.subs, r[i])
+		slog.Debug("Removing unused subscription for Game", "id", stale[i])
+		close(m.subs[stale[i]].new)
+		delete(m.subs, stale[i])
+	}
+	return true
+}
+
+func (m *Manager) update(x context.Context) {
+	slog.Debug("Starting update..")
+	games, ok := m.fetchGames(x)
+	if !ok {
+		return
+	}
+	m.mu.Lock()
+	m.Games = games
+	defer m.mu.Unlock()
+	m.updateActiveGamesLocked()
+	if contextDone(x) {
+		return
+	}
+	stale, ok := m.updateSubscriptionsLocked(x)
+	if !ok {
+		return
+	}
+	if !m.removeStaleSubscriptionsLocked(x, stale) {
+		return
 	}
 	slog.Debug("Update finished", "games_count", len(m.Games))
 }
@@ -251,25 +358,17 @@ func (m *Manager) startUpdate(x context.Context) {
 	atomic.StoreUint32(&m.running, 0)
 }
 
-func (s *subscription) update(x context.Context, m *Manager) {
-	defer func() {
-		if err := recover(); err != nil {
-			slog.Error("Game subscription update function recovered from a panic", "error", err)
-		}
-	}()
+func (s *subscription) queueClients() {
 	for len(s.new) > 0 {
 		s.clients = append(s.clients, &stream{<-s.new, true})
 	}
-	select {
-	case <-x.Done():
-		return
-	default:
-	}
-	slog.Debug("Checking for update for subscribed Game", "id", s.ID)
+}
+
+func (s *subscription) fetchGame(x context.Context, m *Manager) (game, bool) {
 	var g game
 	if err := m.getJSON(x, "api/games/"+strconv.FormatUint(s.ID, 10)+"/scoreboard", &g); err != nil {
 		slog.Error("Error retrieving data for Game ID", "id", s.ID, "error", err.Error())
-		return
+		return g, false
 	}
 	g.Meta.ID = s.ID
 	for i := range m.Games {
@@ -280,80 +379,135 @@ func (s *subscription) update(x context.Context, m *Manager) {
 			break
 		}
 	}
-	select {
-	case <-x.Done():
-		return
-	default:
-	}
+	return g, true
+}
+
+func (s *subscription) buildDelta(g game, assets string) []update {
 	var u []update
-	slog.Debug("Running game comparison on Game", "id", s.ID)
-	s.cache, u = g.Delta(m.assets, &s.last)
+	s.cache, u = g.Delta(assets, &s.last)
 	s.last = g
+	return u
+}
+
+func (s *subscription) writeUpdates(x context.Context, u []update) {
+	r := make([]*stream, 0, len(s.clients))
+	for i := range s.clients {
+		if contextDone(x) {
+			return
+		}
+		if !s.clients[i].ok {
+			s.clients[i].Close()
+			continue
+		}
+		s.clients[i].ok = false
+		if err := s.clients[i].WriteJSON(u); err != nil {
+			slog.Error("Received error by client, removing", "remote", s.clients[i].RemoteAddr().String(), "error", err.Error())
+			s.clients[i].Close()
+			continue
+		}
+		s.clients[i].ok = true
+		r = append(r, s.clients[i])
+	}
+	s.clients = r
+}
+
+func (s *subscription) update(x context.Context, m *Manager) {
+	defer func() {
+		if err := recover(); err != nil {
+			slog.Error("Game subscription update function recovered from a panic", "error", err)
+		}
+	}()
+	s.queueClients()
+	if contextDone(x) {
+		return
+	}
+	slog.Debug("Checking for update for subscribed Game", "id", s.ID)
+	g, ok := s.fetchGame(x, m)
+	if !ok {
+		return
+	}
+	if contextDone(x) {
+		return
+	}
+	slog.Debug("Running game comparison on Game", "id", s.ID)
+	u := s.buildDelta(g, m.assets)
 	if len(u) > 0 {
 		slog.Debug("Updates detected in Game, updating clients", "updates_count", len(u), "id", s.ID)
-		r := make([]*stream, 0, len(s.clients))
-		for i := range s.clients {
-			select {
-			case <-x.Done():
-				return
-			default:
-			}
-			if i > len(s.clients) {
-				return
-			}
-			if !s.clients[i].ok {
-				s.clients[i].Close()
-				continue
-			}
-			s.clients[i].ok = false
-			if err := s.clients[i].WriteJSON(u); err != nil {
-				slog.Error("Received error by client, removing", "remote", s.clients[i].RemoteAddr().String(), "error", err.Error())
-				s.clients[i].Close()
-				continue
-			}
-			s.clients[i].ok = true
-			r = append(r, s.clients[i])
-		}
-		s.clients = r
+		s.writeUpdates(x, u)
 	}
 }
 
-func (m Manager) get(x context.Context, u string) ([]byte, error) {
-	reqUrl, err := url.Parse(m.url.String())
+func (m *Manager) requestURL(endpoint string) (*url.URL, error) {
+	reqURL, err := url.Parse(m.url.String())
 	if err != nil {
 		return nil, err
 	}
-	reqUrl.Path = path.Join(reqUrl.Path, u)
-	c, f := context.WithTimeout(x, m.timeout)
-	defer f()
-	r, err := http.NewRequestWithContext(c, http.MethodGet, reqUrl.String(), nil)
-	if err != nil {
-		return nil, err
+	reqURL.Path = path.Join(reqURL.Path, endpoint)
+	if !strings.HasPrefix(reqURL.Path, "/") {
+		reqURL.Path = "/" + reqURL.Path
 	}
+	return reqURL, nil
+}
+
+func buildGetRequest(ctx context.Context, reqURL *url.URL) *http.Request {
+	return (&http.Request{
+		Method:     http.MethodGet,
+		URL:        reqURL,
+		Host:       reqURL.Host,
+		Header:     make(http.Header),
+		Proto:      "HTTP/1.1",
+		ProtoMajor: 1,
+		ProtoMinor: 1,
+	}).WithContext(ctx)
+}
+
+func (m *Manager) doRequest(ctx context.Context, endpoint string) (*http.Response, context.CancelFunc, error) {
+	reqURL, err := m.requestURL(endpoint)
+	if err != nil {
+		return nil, nil, err
+	}
+	c, f := context.WithTimeout(ctx, m.timeout)
+	r := buildGetRequest(c, reqURL)
 	o, err := m.client.Do(r)
 	if err != nil {
-		return nil, err
+		f()
+		return nil, nil, err
 	}
+	return o, f, nil
+}
+
+func validateResponse(o *http.Response) error {
 	if o.Body == nil {
-		return nil, errors.New("request returned an empty body")
+		return errors.New("request returned an empty body")
 	}
-	defer o.Body.Close()
 	if o.StatusCode >= 400 {
-		return nil, errors.New("request returned non-success status code: " + strconv.Itoa(o.StatusCode))
+		return errors.New("request returned non-success status code: " + strconv.Itoa(o.StatusCode))
 	}
-	b, err := io.ReadAll(o.Body)
+	return nil
+}
+
+func (m *Manager) get(x context.Context, u string) ([]byte, error) {
+	o, f, err := m.doRequest(x, u)
 	if err != nil {
 		return nil, err
 	}
-	return b, nil
+	defer f()
+	if err := validateResponse(o); err != nil {
+		if o.Body != nil {
+			o.Body.Close()
+		}
+		return nil, err
+	}
+	defer o.Body.Close()
+	return io.ReadAll(o.Body)
 }
 
-func (m Manager) getJSON(x context.Context, u string, o interface{}) error {
+func (m *Manager) getJSON(x context.Context, u string, o interface{}) error {
 	r, err := m.get(x, u)
 	if err != nil {
 		return err
 	}
-	if err := json.Unmarshal(r, &o); err != nil {
+	if err := json.Unmarshal(r, o); err != nil {
 		return err
 	}
 	return nil

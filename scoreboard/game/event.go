@@ -22,7 +22,6 @@ type tweet struct {
 	ID        uint64   `json:"id"`
 	User      string   `json:"user"`
 	Text      string   `json:"text"`
-	expire    int64
 	UserName  string   `json:"username"`
 	UserPhoto string   `json:"photo"`
 	Images    []string `json:"images"`
@@ -31,7 +30,6 @@ type tweet struct {
 func (t tweet) Sum() uint64 {
 	return t.ID
 }
-
 
 var (
 	emptyTweet  tweet
@@ -56,11 +54,11 @@ func (e event) Sum() uint64 {
 func (e *events) Hash(h *hasher) uint64 {
 	if e.hash == 0 {
 		for i := range e.Current {
-			h.Hash(e.Current[i].ID)
-			h.Hash(e.Current[i].Type)
+			_ = h.Hash(e.Current[i].ID)
+			_ = h.Hash(e.Current[i].Type)
 			for k, v := range e.Current[i].Data {
-				h.Hash(k)
-				h.Hash(v)
+				_ = h.Hash(k)
+				_ = h.Hash(v)
 			}
 		}
 		e.hash = h.Segment()
@@ -103,19 +101,20 @@ func compareTweet(p *planner, n, o tweet) {
 func (g *game) hashTweets(h *hasher) uint64 {
 	if g.tweets == 0 {
 		for i := range g.Tweets {
-			h.Hash(g.Tweets[i].ID)
+			_ = h.Hash(g.Tweets[i].ID)
 		}
 		g.tweets = h.Segment()
 	}
 	return g.tweets
 }
-func (g game) compareTweets(p *planner, o *game) {
-	if o != nil && o.tweets == g.tweets {
-		for i := range g.Tweets {
-			compareTweet(p, g.Tweets[i], o.Tweets[i])
-		}
-		return
+
+func (g game) compareTweetsByHash(p *planner, o *game) {
+	for i := range g.Tweets {
+		compareTweet(p, g.Tweets[i], o.Tweets[i])
 	}
+}
+
+func (g game) tweetCompareMap(o *game) compare {
 	c := make(compare)
 	if o != nil {
 		for i := range o.Tweets {
@@ -125,48 +124,83 @@ func (g game) compareTweets(p *planner, o *game) {
 	for i := range g.Tweets {
 		c.Two(g.Tweets[i])
 	}
-	for k, v := range c {
-		switch {
-		case !v.Second():
-			p.Remove("tweet-t" + strconv.FormatUint(k, 10))
-		case !v.First():
-			compareTweet(p, v.B.(tweet), emptyTweet)
-		default:
-			compareTweet(p, v.B.(tweet), v.A.(tweet))
-		}
+	return c
+}
+
+func applyTweetCompare(p *planner, k uint64, v *delta) {
+	switch {
+	case !v.Second():
+		p.Remove("tweet-t" + strconv.FormatUint(k, 10))
+	case !v.First():
+		compareTweet(p, v.B.(tweet), emptyTweet)
+	default:
+		compareTweet(p, v.B.(tweet), v.A.(tweet))
 	}
 }
+
+func (g game) compareTweetsByMap(p *planner, o *game) {
+	c := g.tweetCompareMap(o)
+	for k, v := range c {
+		applyTweetCompare(p, k, v)
+	}
+}
+
+func (g game) compareTweets(p *planner, o *game) {
+	if o != nil && o.tweets == g.tweets {
+		g.compareTweetsByHash(p, o)
+		return
+	}
+	g.compareTweetsByMap(p, o)
+}
+
+func (e *events) compareCurrentByHash(p *planner) {
+	for i := range e.Current {
+		p.Event(e.Current[i].ID, e.Current[i].Type, e.Current[i].Data)
+	}
+}
+
+func compareEventsMap(current, old []event) compare {
+	c := make(compare)
+	for i := range old {
+		c.One(old[i])
+	}
+	for i := range current {
+		c.Two(current[i])
+	}
+	return c
+}
+
+func (e *events) applyEventCompare(p *planner, k uint64, v *delta) {
+	if !v.Second() {
+		p.RemoveEvent(k, v.A.(event).Type)
+		return
+	}
+	if v.B.(event).Type > 0 {
+		e.setWindowEvent(p, v.B.(event))
+	}
+	if !v.First() {
+		p.DeltaEvent(k, v.B.(event).Type, v.B.(event).Data)
+		return
+	}
+	p.Event(k, v.B.(event).Type, v.B.(event).Data)
+}
+
+func (e *events) compareCurrentByMap(p *planner, o events) {
+	c := compareEventsMap(e.Current, o.Current)
+	for k, v := range c {
+		e.applyEventCompare(p, k, v)
+	}
+}
+
 func (e *events) Compare(p *planner, o events) {
 	if o.hash == 0 {
 		e.Window = o.Window
 	}
 	if o.hash == e.hash {
-		for i := range e.Current {
-			p.Event(e.Current[i].ID, e.Current[i].Type, e.Current[i].Data)
-		}
+		e.compareCurrentByHash(p)
 		return
 	}
-	c := make(compare)
-	for i := range o.Current {
-		c.One(o.Current[i])
-	}
-	for i := range e.Current {
-		c.Two(e.Current[i])
-	}
-	for k, v := range c {
-		if !v.Second() {
-			p.RemoveEvent(k, v.A.(event).Type)
-			continue
-		}
-		if v.B.(event).Type > 0 {
-			e.setWindowEvent(p, v.B.(event))
-		}
-		if !v.First() {
-			p.DeltaEvent(k, v.B.(event).Type, v.B.(event).Data)
-			continue
-		}
-		p.Event(k, v.B.(event).Type, v.B.(event).Data)
-	}
+	e.compareCurrentByMap(p, o)
 }
 func (e *events) setWindowEvent(p *planner, w event) {
 	if w.Type <= 0 || e.Window.ID == w.ID {
