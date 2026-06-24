@@ -19,10 +19,9 @@ package game
 import "strconv"
 
 type tweet struct {
-	ID        uint64 `json:"id"`
-	User      string `json:"user"`
-	Text      string `json:"text"`
-	expire    int64
+	ID        uint64   `json:"id"`
+	User      string   `json:"user"`
+	Text      string   `json:"text"`
 	UserName  string   `json:"username"`
 	UserPhoto string   `json:"photo"`
 	Images    []string `json:"images"`

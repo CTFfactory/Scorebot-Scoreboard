@@ -8,6 +8,9 @@ using synced websockets.
 This scoreboard supports the Scorebot > 3.3.4 events API and is capable of displaying videos, messages and event
 window popups.
 
+For security hardening, client-side event rendering treats popup/message content as text and strips active content
+such as inline scripts from effect HTML payloads.
+
 Twitter integration is also enabled in this version. Add your API keys into the config to enable it.
 
 ## Download

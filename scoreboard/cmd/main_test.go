@@ -15,7 +15,7 @@ import (
 	"github.com/CTFfactory/Scorebot-Scoreboard/scoreboard/game"
 )
 
-func TestHelperProcess(t *testing.T) {
+func TestHelperProcess(_ *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
 		return
 	}
@@ -30,9 +30,18 @@ func TestHelperProcess(t *testing.T) {
 	main()
 }
 
+func testBinaryCommand(t *testing.T, args ...string) *exec.Cmd {
+	t.Helper()
+	bin, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve test binary path: %v", err)
+	}
+	return exec.Command(bin, args...)
+}
+
 func runMain(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
-	cmd := exec.Command(os.Args[0], append([]string{"-test.run=TestHelperProcess", "--"}, args...)...)
+	cmd := testBinaryCommand(t, append([]string{"-test.run=TestHelperProcess", "--"}, args...)...)
 	cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
 
 	var stdout, stderr bytes.Buffer

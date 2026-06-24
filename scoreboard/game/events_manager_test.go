@@ -273,7 +273,7 @@ func TestManagerHelperFunctions(t *testing.T) {
 			t.Fatalf("expected doRequest transport error with nil cancel func")
 		}
 
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = io.WriteString(w, "ok")
 		}))
 		defer srv.Close()
@@ -431,7 +431,7 @@ func TestManagerNewErrorBranches(t *testing.T) {
 	})
 
 	t.Run("upstream score API error", func(t *testing.T) {
-		api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			http.Error(w, "boom", http.StatusInternalServerError)
 		}))
 		defer api.Close()
@@ -462,7 +462,7 @@ func TestManagerNewErrorBranches(t *testing.T) {
 	})
 
 	t.Run("empty game payload", func(t *testing.T) {
-		api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = io.WriteString(w, `{}`)
 		}))
 		defer api.Close()
@@ -724,7 +724,7 @@ func TestSubscriptionUpdatePaths(t *testing.T) {
 		}
 	})
 
-	t.Run("cancelled context exits early", func(t *testing.T) {
+	t.Run("cancelled context exits early", func(_ *testing.T) {
 		s := &subscription{
 			ID:      1,
 			new:     make(chan *websocket.Conn, 1),
@@ -822,7 +822,7 @@ func TestSubscriptionFetchAndUpdateErrorPaths(t *testing.T) {
 	s.update(context.Background(), m)
 }
 
-func TestSubscriptionUpdateRecoverFromPanic(t *testing.T) {
+func TestSubscriptionUpdateRecoverFromPanic(_ *testing.T) {
 	s := &subscription{
 		ID:      1,
 		new:     make(chan *websocket.Conn, 1),
@@ -971,8 +971,7 @@ func TestManagerUpdateCancellationBranches(t *testing.T) {
 				}, nil
 			}),
 		}
-		for i := 0; i < 50000; i++ {
-			id := uint64(i + 1)
+		for id := uint64(1); id <= 50000; id++ {
 			s := &subscription{ID: id, new: make(chan *websocket.Conn, 1), clients: make([]*stream, 0)}
 			atomic.StoreUint32(&s.stale, 1)
 			m.subs[id] = s
@@ -1010,7 +1009,7 @@ func TestManagerStartUpdateRecoverFromPanic(t *testing.T) {
 }
 
 func TestManagerStartUpdateDeadline(t *testing.T) {
-	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		time.Sleep(40 * time.Millisecond)
 		_, _ = io.WriteString(w, `[]`)
 	}))

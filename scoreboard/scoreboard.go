@@ -51,12 +51,11 @@ type Scoreboard struct {
 	fs http.Handler
 	*game.Manager
 	*http.Server
-	ws     *websocket.Upgrader
-	html   *template.Template
-	key    string
-	cert   string
-	dir    http.FileSystem
-	expire time.Duration
+	ws   *websocket.Upgrader
+	html *template.Template
+	key  string
+	cert string
+	dir  http.FileSystem
 }
 
 func configDirectoryPaths(directory string) (templateDir, publicDir string, err error) {
@@ -210,15 +209,32 @@ func parseEmbeddedTemplate(t *template.Template, f string) error {
 }
 
 func checkWebSocketOrigin(r *http.Request) bool {
-	origin := r.Header.Get("Origin")
+	_, ok := sameHostOrigin(r)
+	return ok
+}
+
+func sameHostOrigin(r *http.Request) (string, bool) {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
 	if len(origin) == 0 {
-		return true
+		return "", false
 	}
 	u, err := url.Parse(origin)
-	if err != nil || len(u.Host) == 0 {
-		return false
+	if err != nil || len(u.Host) == 0 || len(u.Scheme) == 0 {
+		return "", false
 	}
-	return strings.EqualFold(u.Host, r.Host)
+	if !strings.EqualFold(u.Host, r.Host) {
+		return "", false
+	}
+	return origin, true
+}
+
+func setSameHostCORSHeader(w http.ResponseWriter, r *http.Request) {
+	origin, ok := sameHostOrigin(r)
+	if !ok {
+		return
+	}
+	w.Header().Set("Access-Control-Allow-Origin", origin)
+	w.Header().Add("Vary", "Origin")
 }
 
 func (s *Scoreboard) listen(err *error, l *sync.Mutex, f context.CancelFunc) {
@@ -253,7 +269,7 @@ func (s *Scoreboard) http(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	setSameHostCORSHeader(w, r)
 	if isHomePath(r.URL.Path) {
 		s.renderHome(w)
 		return

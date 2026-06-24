@@ -74,7 +74,7 @@ func TestManagerGetParseError(t *testing.T) {
 }
 
 func TestManagerStartUpdateNoDeadline(t *testing.T) {
-	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`[]`))
 	}))
 	defer api.Close()

@@ -219,8 +219,8 @@ func TestCheckWebSocketOrigin(t *testing.T) {
 		Host:   "example.com",
 		Header: make(http.Header),
 	}
-	if !checkWebSocketOrigin(req) {
-		t.Fatalf("expected empty origin to be allowed")
+	if checkWebSocketOrigin(req) {
+		t.Fatalf("expected empty origin to be rejected")
 	}
 
 	req.Header.Set("Origin", "https://example.com")
@@ -236,6 +236,11 @@ func TestCheckWebSocketOrigin(t *testing.T) {
 	req.Header.Set("Origin", "://bad-origin")
 	if checkWebSocketOrigin(req) {
 		t.Fatalf("expected invalid origin to be rejected")
+	}
+
+	req.Header.Set("Origin", "example.com")
+	if checkWebSocketOrigin(req) {
+		t.Fatalf("expected origin without scheme to be rejected")
 	}
 }
 
@@ -272,8 +277,31 @@ func TestScoreboardHTTPHandler(t *testing.T) {
 		if body := w.Body.String(); body != "HOME" {
 			t.Fatalf("expected home template body, got %q", body)
 		}
-		if cors := w.Header().Get("Access-Control-Allow-Origin"); cors != "*" {
-			t.Fatalf("expected wildcard CORS header, got %q", cors)
+		if cors := w.Header().Get("Access-Control-Allow-Origin"); len(cors) != 0 {
+			t.Fatalf("expected no CORS header without Origin, got %q", cors)
+		}
+	})
+
+	t.Run("allow same-host origin for cors", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.Header.Set("Origin", "https://example.com")
+		w := httptest.NewRecorder()
+		s.http(w, r)
+		if cors := w.Header().Get("Access-Control-Allow-Origin"); cors != "https://example.com" {
+			t.Fatalf("expected same-host CORS header, got %q", cors)
+		}
+		if vary := w.Header().Values("Vary"); len(vary) != 1 || vary[0] != "Origin" {
+			t.Fatalf("expected Vary Origin header, got %v", vary)
+		}
+	})
+
+	t.Run("reject mismatched origin for cors", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.Header.Set("Origin", "https://other.example.com")
+		w := httptest.NewRecorder()
+		s.http(w, r)
+		if cors := w.Header().Get("Access-Control-Allow-Origin"); len(cors) != 0 {
+			t.Fatalf("expected no CORS header for mismatched origin, got %q", cors)
 		}
 	})
 
@@ -361,8 +389,9 @@ func TestScoreboardHTTPTemplateExecutionErrors(t *testing.T) {
 func TestScoreboardListenWithoutTLS(t *testing.T) {
 	s := &Scoreboard{
 		Server: &http.Server{
-			Addr:    "invalid-listen-address",
-			Handler: http.NewServeMux(),
+			Addr:              "invalid-listen-address",
+			Handler:           http.NewServeMux(),
+			ReadHeaderTimeout: 20 * time.Millisecond,
 		},
 	}
 	called := false
@@ -380,8 +409,9 @@ func TestScoreboardListenWithoutTLS(t *testing.T) {
 func TestScoreboardListenWithTLSFilesError(t *testing.T) {
 	s := &Scoreboard{
 		Server: &http.Server{
-			Addr:    "127.0.0.1:0",
-			Handler: http.NewServeMux(),
+			Addr:              "127.0.0.1:0",
+			Handler:           http.NewServeMux(),
+			ReadHeaderTimeout: 20 * time.Millisecond,
 		},
 		cert: "/path/that/does/not/exist-cert.pem",
 		key:  "/path/that/does/not/exist-key.pem",

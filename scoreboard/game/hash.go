@@ -74,12 +74,28 @@ func writeUint16Bytes(b []byte, n uint16) {
 	b[0], b[1] = byte(n>>8), byte(n)
 }
 
+func writeInt16Bytes(b []byte, n int16) {
+	b[0], b[1] = byte(n>>8), byte(n)
+}
+
 func writeUint32Bytes(b []byte, n uint32) {
 	b[0], b[1] = byte(n>>24), byte(n>>16)
 	b[2], b[3] = byte(n>>8), byte(n)
 }
 
+func writeInt32Bytes(b []byte, n int32) {
+	b[0], b[1] = byte(n>>24), byte(n>>16)
+	b[2], b[3] = byte(n>>8), byte(n)
+}
+
 func writeUint64Bytes(b []byte, n uint64) {
+	b[0], b[1] = byte(n>>56), byte(n>>48)
+	b[2], b[3] = byte(n>>40), byte(n>>32)
+	b[4], b[5] = byte(n>>24), byte(n>>16)
+	b[6], b[7] = byte(n>>8), byte(n)
+}
+
+func writeInt64Bytes(b []byte, n int64) {
 	b[0], b[1] = byte(n>>56), byte(n>>48)
 	b[2], b[3] = byte(n>>40), byte(n>>32)
 	b[4], b[5] = byte(n>>24), byte(n>>16)
@@ -144,7 +160,7 @@ func (h *hasher) hashInt8orUint8(v interface{}, b []byte) bool {
 func (h *hasher) hashInt16orUint16(v interface{}, b []byte) bool {
 	switch i := v.(type) {
 	case int16:
-		writeUint16Bytes(b, uint16(i))
+		writeInt16Bytes(b, i)
 	case uint16:
 		writeUint16Bytes(b, i)
 	default:
@@ -157,7 +173,7 @@ func (h *hasher) hashInt16orUint16(v interface{}, b []byte) bool {
 func (h *hasher) hashInt32orUint32(v interface{}, b []byte) bool {
 	switch i := v.(type) {
 	case int32:
-		writeUint32Bytes(b, uint32(i))
+		writeInt32Bytes(b, i)
 	case uint32:
 		writeUint32Bytes(b, i)
 	default:
@@ -180,11 +196,11 @@ func (h *hasher) hashSmallInt(v interface{}, b []byte) bool {
 func (h *hasher) hashLargeInt(v interface{}, b []byte) bool {
 	switch i := v.(type) {
 	case int64:
-		writeUint64Bytes(b, uint64(i))
+		writeInt64Bytes(b, i)
 	case uint64:
 		writeUint64Bytes(b, i)
 	case int:
-		writeUint64Bytes(b, uint64(i))
+		writeInt64Bytes(b, int64(i))
 	case uint:
 		writeUint64Bytes(b, uint64(i))
 	default:

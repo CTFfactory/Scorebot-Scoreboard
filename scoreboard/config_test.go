@@ -33,7 +33,7 @@ func captureStdout(t *testing.T, fn func()) string {
 	return string(out)
 }
 
-func TestConfigHelperProcess(t *testing.T) {
+func TestConfigHelperProcess(_ *testing.T) {
 	if os.Getenv("GO_WANT_CONFIG_HELPER") != "1" {
 		return
 	}
@@ -52,9 +52,18 @@ func TestConfigHelperProcess(t *testing.T) {
 	os.Exit(0)
 }
 
+func testBinaryCommand(t *testing.T, args ...string) *exec.Cmd {
+	t.Helper()
+	bin, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve test binary path: %v", err)
+	}
+	return exec.Command(bin, args...)
+}
+
 func runConfigHelper(t *testing.T, mode string) (int, string, string) {
 	t.Helper()
-	cmd := exec.Command(os.Args[0], "-test.run=TestConfigHelperProcess")
+	cmd := testBinaryCommand(t, "-test.run=TestConfigHelperProcess")
 	cmd.Env = append(os.Environ(), "GO_WANT_CONFIG_HELPER=1", "CONFIG_HELPER_MODE="+mode)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
