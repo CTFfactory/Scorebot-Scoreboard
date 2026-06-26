@@ -461,7 +461,7 @@ function handle_update(update) {
         return;
     }
     if (update.name !== "class") {
-        target.style[update.name] = update.value;
+        target.style.setProperty(update.name, update.value);
         return;
     }
     let class_action = update.value[0];
