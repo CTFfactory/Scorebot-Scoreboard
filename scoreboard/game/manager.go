@@ -545,3 +545,7 @@ func New(burl, d string, tick, t time.Duration) (*Manager, error) {
 	}
 	return m, nil
 }
+
+func (m *Manager) URL() *url.URL {
+	return &m.url
+}

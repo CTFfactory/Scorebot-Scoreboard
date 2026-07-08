@@ -24,6 +24,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/signal"
@@ -156,6 +157,7 @@ func (c config) New() (*Scoreboard, error) {
 	s.fs, s.dir = http.FileServer(http.FS(&s)), http.Dir(publicDir)
 	s.Server.Handler.(*http.ServeMux).HandleFunc("/", s.http)
 	s.Server.Handler.(*http.ServeMux).HandleFunc("/w", s.httpWebsocket)
+	s.Server.Handler.(*http.ServeMux).Handle("/upload/", httputil.NewSingleHostReverseProxy(s.Manager.URL()))
 	return &s, nil
 }
 
