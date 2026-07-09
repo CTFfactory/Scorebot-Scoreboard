@@ -260,3 +260,23 @@ func TestGameDeltaCurrentBehavior(t *testing.T) {
 		t.Fatalf("expected no delta on equivalent game state, got %d", len(delta2))
 	}
 }
+
+func TestGameDeltaListenerRelativeLogosByDefault(t *testing.T) {
+	g := game{
+		Message: "m",
+		Meta:    meta{ID: 7, Name: "Example", Mode: redBlue, Status: running},
+		Teams: []team{
+			{ID: 1, Name: "A", Logo: "logo-a.png"},
+			{ID: 2, Name: "B", Logo: "/logo-b.png"},
+		},
+	}
+
+	_, _ = g.Delta("", nil)
+
+	if g.Teams[0].Logo != "/logo-a.png" {
+		t.Fatalf("expected listener-relative root logo path for non-slash logo, got %q", g.Teams[0].Logo)
+	}
+	if g.Teams[1].Logo != "/logo-b.png" {
+		t.Fatalf("expected listener-relative logo path for slash logo, got %q", g.Teams[1].Logo)
+	}
+}

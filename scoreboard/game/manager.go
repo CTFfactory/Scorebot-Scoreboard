@@ -522,7 +522,7 @@ func New(burl, d string, tick, t time.Duration) (*Manager, error) {
 		u.Scheme = "http"
 	}
 	if len(d) == 0 {
-		d = u.String()
+		d = ""
 	}
 	m := &Manager{
 		url:    *u,

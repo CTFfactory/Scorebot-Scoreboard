@@ -120,8 +120,8 @@ func TestManagerNewAndGameLookup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("manager new: %v", err)
 	}
-	if m.assets != "http://scorebot" {
-		t.Fatalf("expected assets to default to base URL, got %q", m.assets)
+	if m.assets != "" {
+		t.Fatalf("expected assets to default to listener-relative paths, got %q", m.assets)
 	}
 	m.active["te-am"] = 9
 	if got := m.Game("Te am"); got != 9 {
