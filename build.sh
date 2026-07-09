@@ -23,10 +23,13 @@ fi
 mkdir -p "$(dirname "$output")"
 
 printf "Building..\n"
-bash -c "cd scoreboard; go build -trimpath -buildvcs=false -ldflags '-s -w -X github.com/PvJScorebot/scorebot-scoreboard/scoreboard.version=$(date +%F)_$(git rev-parse --short HEAD 2> /dev/null || echo "non-git")' -o \"$output\" cmd/main.go"
+version="$(date +%F)_$(git rev-parse --short HEAD 2> /dev/null || echo non-git)"
+(
+    cd scoreboard || exit 1
+    go build -trimpath -buildvcs=false -ldflags "-s -w -X github.com/CTFfactory/Scorebot-Scoreboard/scoreboard.version=${version}" -o "$output" ./cmd/main.go
+)
 
-which upx &> /dev/null
-if [ $? -eq 0 ] && [ -f "$output" ]; then
+if command -v upx > /dev/null 2>&1 && [ -f "$output" ]; then
     upx --compress-exports=1 --strip-relocs=1 --compress-icons=2 --best --no-backup -9 "$output"
 fi
 
