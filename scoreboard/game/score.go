@@ -77,7 +77,7 @@ func (s scoreFlag) Compare(p *planner, o scoreFlag) {
 		p.Value("score-fcaptured", s.Captured, "score-flag-captured score score-flag")
 		return
 	}
-	p.DeltaValue("score-fpen", s.Open, "score-flag-open score score-flag")
+	p.DeltaValue("score-fopen", s.Open, "score-flag-open score score-flag")
 	p.DeltaValue("score-flost", s.Lost, "score-flag-lost score score-flag")
 	p.DeltaValue("score-fcaptured", s.Captured, "score-flag-captured score score-flag")
 }
