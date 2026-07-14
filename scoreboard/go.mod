@@ -2,6 +2,6 @@ module github.com/CTFfactory/Scorebot-Scoreboard/scoreboard
 
 go 1.26
 
-toolchain go1.26.4
+toolchain go1.26.5
 
 require github.com/gorilla/websocket v1.5.3
