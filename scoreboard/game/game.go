@@ -263,23 +263,43 @@ func (m meta) Compare(p *planner, old meta) {
 	p.DeltaValue("status-status", m.Status, "game-status")
 }
 func buildLogoURL(s, logo string) string {
-	if logo == "default.png" || len(logo) == 0 {
+	if isDefaultLogo(logo) {
 		return "/image/team.png"
 	}
-	if strings.HasPrefix(logo, "http://") || strings.HasPrefix(logo, "https://") || strings.HasPrefix(logo, "//") {
+	if isExternalLogoURL(logo) {
 		return logo
 	}
 	if len(s) == 0 {
-		if logo[0] != '/' {
-			return "/" + logo
-		}
+		return logoWithRootPrefix(logo)
+	}
+	return joinLogoURL(s, logo)
+}
+
+func isDefaultLogo(logo string) bool {
+	return logo == "default.png" || len(logo) == 0
+}
+
+func isExternalLogoURL(logo string) bool {
+	return strings.HasPrefix(logo, "http://") ||
+		strings.HasPrefix(logo, "https://") ||
+		strings.HasPrefix(logo, "//")
+}
+
+func logoWithRootPrefix(logo string) string {
+	if strings.HasPrefix(logo, "/") {
 		return logo
 	}
-	if len(s) > 0 && s[len(s)-1] != '/' && logo[0] != '/' {
-		return s + "/" + logo
-	}
-	if s[len(s)-1] == '/' && logo[0] == '/' {
+	return "/" + logo
+}
+
+func joinLogoURL(s, logo string) string {
+	sHasSlash := strings.HasSuffix(s, "/")
+	logoHasSlash := strings.HasPrefix(logo, "/")
+	if sHasSlash && logoHasSlash {
 		return s + logo[1:]
+	}
+	if !sHasSlash && !logoHasSlash {
+		return s + "/" + logo
 	}
 	return s + logo
 }

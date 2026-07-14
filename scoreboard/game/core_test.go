@@ -280,3 +280,65 @@ func TestGameDeltaListenerRelativeLogosByDefault(t *testing.T) {
 		t.Fatalf("expected listener-relative logo path for slash logo, got %q", g.Teams[1].Logo)
 	}
 }
+
+func TestBuildLogoURL(t *testing.T) {
+	cases := []struct {
+		name string
+		s    string
+		logo string
+		want string
+	}{
+		{name: "default-logo", s: "https://assets", logo: "default.png", want: "/image/team.png"},
+		{name: "empty-logo", s: "https://assets", logo: "", want: "/image/team.png"},
+		{name: "http-logo", s: "https://assets", logo: "http://cdn/logo.png", want: "http://cdn/logo.png"},
+		{name: "https-logo", s: "https://assets", logo: "https://cdn/logo.png", want: "https://cdn/logo.png"},
+		{name: "protocol-relative-logo", s: "https://assets", logo: "//cdn/logo.png", want: "//cdn/logo.png"},
+		{name: "listener-relative-no-leading-slash", s: "", logo: "logo.png", want: "/logo.png"},
+		{name: "listener-relative-leading-slash", s: "", logo: "/logo.png", want: "/logo.png"},
+		{name: "join-missing-slashes", s: "https://assets", logo: "logo.png", want: "https://assets/logo.png"},
+		{name: "join-double-slashes", s: "https://assets/", logo: "/logo.png", want: "https://assets/logo.png"},
+		{name: "join-source-has-slash", s: "https://assets/", logo: "logo.png", want: "https://assets/logo.png"},
+		{name: "join-logo-has-slash", s: "https://assets", logo: "/logo.png", want: "https://assets/logo.png"},
+	}
+	for _, tc := range cases {
+		if got := buildLogoURL(tc.s, tc.logo); got != tc.want {
+			t.Fatalf("%s: expected %q got %q", tc.name, tc.want, got)
+		}
+	}
+}
+
+func TestLogoURLHelpers(t *testing.T) {
+	if !isDefaultLogo("") || !isDefaultLogo("default.png") || isDefaultLogo("logo.png") {
+		t.Fatalf("unexpected default logo classification")
+	}
+
+	if !isExternalLogoURL("http://cdn/logo.png") ||
+		!isExternalLogoURL("https://cdn/logo.png") ||
+		!isExternalLogoURL("//cdn/logo.png") ||
+		isExternalLogoURL("/logo.png") {
+		t.Fatalf("unexpected external logo URL classification")
+	}
+
+	if got := logoWithRootPrefix("logo.png"); got != "/logo.png" {
+		t.Fatalf("expected root-prefixed logo, got %q", got)
+	}
+	if got := logoWithRootPrefix("/logo.png"); got != "/logo.png" {
+		t.Fatalf("expected unchanged rooted logo, got %q", got)
+	}
+
+	joinCases := []struct {
+		s    string
+		logo string
+		want string
+	}{
+		{s: "https://assets", logo: "logo.png", want: "https://assets/logo.png"},
+		{s: "https://assets/", logo: "/logo.png", want: "https://assets/logo.png"},
+		{s: "https://assets/", logo: "logo.png", want: "https://assets/logo.png"},
+		{s: "https://assets", logo: "/logo.png", want: "https://assets/logo.png"},
+	}
+	for _, tc := range joinCases {
+		if got := joinLogoURL(tc.s, tc.logo); got != tc.want {
+			t.Fatalf("join source %q logo %q expected %q got %q", tc.s, tc.logo, tc.want, got)
+		}
+	}
+}
