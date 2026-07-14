@@ -34,8 +34,8 @@ func TestScoreFlagAndTicketComparisons(t *testing.T) {
 		t.Fatalf("expected delta updates for new score flags")
 	}
 	// This captures the existing field ID emitted by the current implementation.
-	if !containsUpdateID(p.Delta, "score-fpen") {
-		t.Fatalf("expected score-fpen update id in current behavior")
+	if !containsUpdateID(p.Delta, "score-fopen") {
+		t.Fatalf("expected score-fopen update id in current behavior")
 	}
 
 	st := scoreTicket{Open: 4, Closed: 5}
