@@ -66,7 +66,7 @@ func (c *config) verify() error {
 		c.Tick = 5
 	}
 	if c.Timeout <= 0 {
-		c.Timeout = 10
+		c.Timeout = 25
 	}
 	if len(c.Listen) == 0 {
 		c.Listen = "0.0.0.0:8080"
