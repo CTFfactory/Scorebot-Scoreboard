@@ -8,6 +8,9 @@ using synced websockets.
 This scoreboard supports the Scorebot > 3.3.4 events API and is capable of displaying videos, messages and event
 window popups.
 
+For security hardening, client-side event rendering treats popup/message content as text and strips active content
+such as inline scripts from effect HTML payloads.
+
 Twitter integration is also enabled in this version. Add your API keys into the config to enable it.
 
 ## Download
@@ -23,6 +26,28 @@ git clone https://github.com/iDigitalFlame/scorebot-scoreboard/
 cd scorebot-scoreboard
 bash build.sh
 ```
+
+## Quality Checks
+
+Run checks from the module directory:
+
+```shell
+cd scoreboard
+go test ./...
+go test -race ./...
+go test -cover ./...
+bash ./test-binary.sh
+```
+
+The repository also includes `scoreboard/Makefile` targets for `build`, test, race, coverage, complexity, lint, vulnerability checks, and `binary-test`.
+
+## CI/CD
+
+- CI workflow: `.github/workflows/ci.yml`
+  - Runs tests, race tests, binary integration script (`scoreboard/test-binary.sh`), lint, complexity scan, coverage check, and vulnerability scan.
+  - 99% coverage check is enforced as a blocking gate.
+- Release workflow: `.github/workflows/release.yml`
+  - Runs GoReleaser on `v*` tags using `.goreleaser.yml`.
 
 ## Parameters
 

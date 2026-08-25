@@ -69,43 +69,71 @@ func (c compare) Two(d comparable) {
 func (p *planner) rollbackPrefix() {
 	p.prefix, p.last = p.last[len(p.last)-1], p.last[:len(p.last)-1]
 }
+
+func printSignedInt(v interface{}) (string, bool) {
+	switch i := v.(type) {
+	case int:
+		return strconv.Itoa(i), true
+	case int8:
+		return strconv.FormatInt(int64(i), 10), true
+	case int16:
+		return strconv.FormatInt(int64(i), 10), true
+	case int32:
+		return strconv.FormatInt(int64(i), 10), true
+	case int64:
+		return strconv.FormatInt(i, 10), true
+	default:
+		return "", false
+	}
+}
+
+func printUnsignedInt(v interface{}) (string, bool) {
+	switch i := v.(type) {
+	case uint:
+		return strconv.FormatUint(uint64(i), 10), true
+	case uint8:
+		return strconv.FormatUint(uint64(i), 10), true
+	case uint16:
+		return strconv.FormatUint(uint64(i), 10), true
+	case uint32:
+		return strconv.FormatUint(uint64(i), 10), true
+	case uint64:
+		return strconv.FormatUint(i, 10), true
+	default:
+		return "", false
+	}
+}
+
+func printFloat(v interface{}) (string, bool) {
+	switch i := v.(type) {
+	case float32:
+		return strconv.FormatFloat(float64(i), 'f', 2, 32), true
+	case float64:
+		return strconv.FormatFloat(i, 'f', 2, 64), true
+	default:
+		return "", false
+	}
+}
+
 func printStr(v interface{}) string {
-	var s string
 	switch i := v.(type) {
 	case []byte:
-		s = string(i)
+		return string(i)
 	case string:
-		s = i
-	case int:
-		s = strconv.Itoa(i)
-	case uint:
-		s = strconv.FormatUint(uint64(i), 10)
-	case int8:
-		s = strconv.FormatInt(int64(i), 10)
-	case uint8:
-		s = strconv.FormatUint(uint64(i), 10)
-	case int16:
-		s = strconv.FormatInt(int64(i), 10)
-	case uint16:
-		s = strconv.FormatUint(uint64(i), 10)
-	case int32:
-		s = strconv.FormatInt(int64(i), 10)
-	case uint32:
-		s = strconv.FormatUint(uint64(i), 10)
-	case int64:
-		s = strconv.FormatInt(i, 10)
-	case uint64:
-		s = strconv.FormatUint(i, 10)
-	case float32:
-		s = strconv.FormatFloat(float64(i), 'f', 2, 32)
-	case float64:
-		s = strconv.FormatFloat(i, 'f', 2, 64)
-	default:
-		// NOTE(dij): Should we remove this? It seems like it's not called.
-		//            Could remove a call to the heavy 'fmt' package.
-		s = fmt.Sprintf("%s", v)
+		return i
 	}
-	return s
+	if s, ok := printSignedInt(v); ok {
+		return s
+	}
+	if s, ok := printUnsignedInt(v); ok {
+		return s
+	}
+	if s, ok := printFloat(v); ok {
+		return s
+	}
+	// NOTE(dij): Should we remove this? It seems like it's not called.
+	//            Could remove a call to the heavy 'fmt' package.
+	return fmt.Sprintf("%s", v)
 }
 func (p *planner) Remove(i interface{}) {
 	u := update{ID: printStr(i), Remove: true}
@@ -118,8 +146,8 @@ func (p *planner) Remove(i interface{}) {
 }
 func (p *planner) RemoveEvent(i uint64, t uint8) {
 	p.Delta = append(p.Delta, update{
-		ID:     strconv.Itoa(int(i)),
-		Value:  strconv.Itoa(int(t)),
+		ID:     strconv.FormatUint(i, 10),
+		Value:  strconv.FormatUint(uint64(t), 10),
 		Event:  true,
 		Remove: true,
 	})
@@ -164,10 +192,10 @@ func (p *planner) DeltaProperty(i, v interface{}, s string) {
 }
 func (p *planner) Event(i uint64, t uint8, d map[string]string) {
 	p.Create = append(p.Create, update{
-		ID:    strconv.Itoa(int(i)),
+		ID:    strconv.FormatUint(i, 10),
 		Data:  d,
 		Event: true,
-		Value: strconv.Itoa(int(t)),
+		Value: strconv.FormatUint(uint64(t), 10),
 	})
 }
 func (p *planner) DeltaEvent(i uint64, t uint8, d map[string]string) {

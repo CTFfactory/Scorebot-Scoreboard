@@ -38,17 +38,17 @@ type scoreTicket struct {
 
 func (s *score) Hash(h *hasher) uint64 {
 	if s.hash == 0 {
-		h.Hash(s.Total)
-		h.Hash(s.Health)
+		_ = h.Hash(s.Total)
+		_ = h.Hash(s.Health)
 		s.hash = h.Segment()
 	}
 	return s.hash
 }
 func (s *scoreFlag) Hash(h *hasher) uint64 {
 	if s.hash == 0 {
-		h.Hash(s.Open)
-		h.Hash(s.Lost)
-		h.Hash(s.Captured)
+		_ = h.Hash(s.Open)
+		_ = h.Hash(s.Lost)
+		_ = h.Hash(s.Captured)
 		s.hash = h.Segment()
 	}
 	return s.hash
@@ -64,8 +64,8 @@ func (s score) Compare(p *planner, o score) {
 }
 func (s *scoreTicket) Hash(h *hasher) uint64 {
 	if s.hash == 0 {
-		h.Hash(s.Open)
-		h.Hash(s.Closed)
+		_ = h.Hash(s.Open)
+		_ = h.Hash(s.Closed)
 		s.hash = h.Segment()
 	}
 	return s.hash
