@@ -27,19 +27,20 @@ var (
 )
 
 type team struct {
-	Name    string      `json:"name"`
-	Logo    string      `json:"logo"`
-	Color   string      `json:"color"`
-	Beacons []beacon    `json:"beacons"`
-	Hosts   []host      `json:"hosts"`
-	Flags   scoreFlag   `json:"flags"`
-	Score   score       `json:"score"`
-	Tickets scoreTicket `json:"tickets"`
-	ID      uint64      `json:"id"`
-	hash    uint64
-	total   uint64
-	Minimal bool `json:"minimal"`
-	Offense bool `json:"offense"`
+	Name        string      `json:"name"`
+	DisplayName string      `json:"display_name"`
+	Logo        string      `json:"logo"`
+	Color       string      `json:"color"`
+	Beacons     []beacon    `json:"beacons"`
+	Hosts       []host      `json:"hosts"`
+	Flags       scoreFlag   `json:"flags"`
+	Score       score       `json:"score"`
+	Tickets     scoreTicket `json:"tickets"`
+	ID          uint64      `json:"id"`
+	hash        uint64
+	total       uint64
+	Minimal     bool `json:"minimal"`
+	Offense     bool `json:"offense"`
 }
 type beacon struct {
 	Color string `json:"color"`
@@ -67,6 +68,7 @@ func (t *team) Hash(h *hasher) uint64 {
 	if t.hash == 0 {
 		_ = h.Hash(t.ID)
 		_ = h.Hash(t.Name)
+		_ = h.Hash(t.DisplayName)
 		_ = h.Hash(t.Logo)
 		_ = h.Hash(t.Color)
 		_ = h.Hash(t.Offense)
@@ -95,6 +97,12 @@ func (b *beacon) Hash(h *hasher) uint64 {
 	}
 	return b.hash
 }
+func (t team) FormattedName() string {
+	if t.DisplayName != "" {
+		return t.DisplayName + " (" + t.Name + ")"
+	}
+	return t.Name
+}
 
 func (t team) writeHeader(p *planner, existing bool) {
 	id := "team-t" + strconv.FormatUint(t.ID, 10)
@@ -112,7 +120,7 @@ func (t team) writeIdentityValues(p *planner) {
 	p.Value("name", "", "team-name")
 	p.Value("host", "", "team-host")
 	p.Value("score", "", "team-score")
-	p.Value("name-name", t.Name, "team-name-div")
+	p.Value("name-name", t.FormattedName(), "team-name-div")
 	p.Property("logo", t.Color, "background-color")
 	p.Property("logo", "url('"+t.Logo+"')", "background-image")
 	p.Property("", t.Color, "border-color")
@@ -135,7 +143,7 @@ func (t team) writeIdentityDelta(p *planner) {
 	p.DeltaValue("name", "", "team-name")
 	p.DeltaValue("host", "", "team-host")
 	p.DeltaValue("score", "", "team-score")
-	p.DeltaValue("name-name", t.Name, "team-name-div")
+	p.DeltaValue("name-name", t.FormattedName(), "team-name-div")
 	p.DeltaProperty("logo", t.Color, "background-color")
 	p.DeltaProperty("logo", "url('"+t.Logo+"')", "background-image")
 	p.DeltaProperty("", t.Color, "border-color")

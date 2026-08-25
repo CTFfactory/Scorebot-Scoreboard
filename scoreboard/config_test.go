@@ -88,8 +88,8 @@ func TestConfigVerifyDefaults(t *testing.T) {
 	if c.Tick != 5 {
 		t.Fatalf("expected default tick 5, got %d", c.Tick)
 	}
-	if c.Timeout != 10 {
-		t.Fatalf("expected default timeout 10, got %d", c.Timeout)
+	if c.Timeout != 25 {
+		t.Fatalf("expected default timeout 25, got %d", c.Timeout)
 	}
 	if c.Listen != "0.0.0.0:8080" {
 		t.Fatalf("expected default listen, got %q", c.Listen)
@@ -262,8 +262,8 @@ func TestCmdlineConfigVerifyAfterFileLoad(t *testing.T) {
 	if s.Addr != "0.0.0.0:8080" {
 		t.Fatalf("expected verify() to restore default listen, got %q", s.Addr)
 	}
-	if s.ReadTimeout != 10*time.Second {
-		t.Fatalf("expected default timeout 10s, got %v", s.ReadTimeout)
+	if s.ReadTimeout != 25*time.Second {
+		t.Fatalf("expected default timeout 25s, got %v", s.ReadTimeout)
 	}
 }
 
